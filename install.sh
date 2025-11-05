@@ -29,13 +29,11 @@ mkdir -p "$PREFIX/include"
 mkdir -p "$PREFIX/share"
 mkdir -p "$PREFIX/soft"
 
-if [[ -d ~/.local ]] then
-    export PATH=~/.local/bin:$PATH
-    export LD_LIBRARY_PATH=~/.local/lib:/usr/local/lib:$LD_LIBRARY_PATH
-    export MANPATH="/usr/local/man:~/.local/man"
-    CFLAGS+="-I~/.local/include"
-    CXXFLAGS+="-I~/.local/include"
-fi
+export PATH=~/.local/bin:$PATH
+export LD_LIBRARY_PATH=~/.local/lib:/usr/local/lib:$LD_LIBRARY_PATH
+export MANPATH="/usr/local/man:~/.local/man"
+CFLAGS+="-I~/.local/include"
+CXXFLAGS+="-I~/.local/include"
 
 function link_package() {
     local package_path="$1"
