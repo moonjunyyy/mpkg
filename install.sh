@@ -29,7 +29,7 @@ mkdir -p "$PREFIX/include"
 mkdir -p "$PREFIX/share"
 mkdir -p "$PREFIX/soft"
 
-export PATH=~/.local/bin:$PATH
+export PATH=$HOME/.local/bin:$HOME/.cargo/bin::$PATH
 export LD_LIBRARY_PATH=~/.local/lib:/usr/local/lib:$LD_LIBRARY_PATH
 export MANPATH="/usr/local/man:~/.local/man"
 CFLAGS+="-I~/.local/include"
@@ -287,7 +287,7 @@ else
     local neovim_versions=$(download_url https://api.github.com/repOS/neovim/neovim/releases tmp.html)
     local version=$(jq -r '.[].tag_name' tmp.html | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1) 
     echo $version
-    local url=$(jq -r --arg ver "$version" --arg OS "$os" --arg ARCH "$arch" '.[] | select(.tag_name == $ver) | .assets[] | select(.name == "nvim-" + $os + "-" + $arch + ".tar.gz") | .browser_download_url' tmp.html)
+    local url=$(jq -r --arg ver "$version" --arg OS "$OS" --arg ARCH "$ARCH" '.[] | select(.tag_name == $ver) | .assets[] | select(.name == "nvim-" + $OS + "-" + $arch + ".tar.gz") | .browser_download_url' tmp.html)
     echo $url
     download_url "$url" "nvim-$version.tar.gz"
     tar -xzf "nvim-$version.tar.gz"
