@@ -260,7 +260,7 @@ if [[ $? -eq 0 ]]; then
     echo "uv is already installed."
 else
     download_url "https://astral.sh/uv/install.sh" "install_uv.sh"
-    sh install_uv.sh -a "$ARCH" -o "$OS" -p "$PREFIX"
+    sh install_uv.sh
     rm -rf install_uv.sh
     uv python install
 fi
@@ -287,7 +287,7 @@ else
     local neovim_versions=$(download_url https://api.github.com/repOS/neovim/neovim/releases tmp.html)
     local version=$(jq -r '.[].tag_name' tmp.html | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1) 
     echo $version
-    local url=$(jq -r --arg ver "$version" --arg OS "$OS" --arg ARCH "$ARCH" '.[] | select(.tag_name == $ver) | .assets[] | select(.name == "nvim-" + $OS + "-" + $arch + ".tar.gz") | .browser_download_url' tmp.html)
+    local url=$(jq -r --arg ver "$version" --arg OS "$OS" --arg ARCH "$ARCH" '.[] | select(.tag_name == $ver) | .assets[] | select(.name == "nvim-" + $OS + "-" + $ARCH + ".tar.gz") | .browser_download_url' tmp.html)
     echo $url
     download_url "$url" "nvim-$version.tar.gz"
     tar -xzf "nvim-$version.tar.gz"
