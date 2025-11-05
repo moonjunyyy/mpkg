@@ -234,7 +234,7 @@ if [[ $? -eq 0 ]]; then
     echo "Node.js is already installed."
 else
     download_url "https://raw.githubusercontent.com/creationix/nvm/master/install.sh" "install_nvm.sh"
-    bash install_nvm.sh
+    sh install_nvm.sh
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     nvm install --lts
@@ -248,7 +248,7 @@ if [[ $? -eq 0 ]]; then
     echo "Rust is already installed."
 else
     download_url "https://sh.rustup.rs" "install_rustup.sh"
-    bash install_rustup.sh -y --no-modify-path
+    sh install_rustup.sh -y --no-modify-path
     source $HOME/.cargo/env
     rm -rf install_rustup.sh
 fi
@@ -260,7 +260,7 @@ if [[ $? -eq 0 ]]; then
     echo "uv is already installed."
 else
     download_url "https://astral.sh/uv/install.sh" "install_uv.sh"
-    bash install_uv.sh -a "$ARCH" -o "$OS" -p "$PREFIX"
+    sh install_uv.sh -a "$ARCH" -o "$OS" -p "$PREFIX"
     rm -rf install_uv.sh
     uv python install
 fi
@@ -269,7 +269,7 @@ export ZSH="$HOME/.oh-my-zsh"
 # Bootstrap Oh My Zsh and Starship if not already installed
 if [[ ! -d $ZSH ]] then
     download_url 'https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh' 'install_ohmyzsh.sh'
-    bash install_ohmyzsh.sh --unattended
+    sh install_ohmyzsh.sh --unattended
     rm -rf install_ohmyzsh.sh
 
     # Zsh autosuggestions plugin and syntax highlighting
@@ -334,7 +334,7 @@ export STARSHIP_THEME="jetpack"
 export HIST_STAMPS="mm/dd/yyyy"
 if [[ $(which starship &> /dev/null) -gt 0 ]] then
     download_url 'https://starship.rs/install.sh' 'install_starship.sh'
-    bash install_starship.sh --bin-dir "$PREFIX/bin" -y
+    sh install_starship.sh --bin-dir "$PREFIX/bin" -y
     rm -rf install_starship.sh
     download_url 'https://starship.rs/presets/toml/jetpack.toml' '~/.config/starship/jetpack.toml'
 fi
