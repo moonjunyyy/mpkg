@@ -136,9 +136,9 @@ vim.api.nvim_create_autocmd('LspAttach', {
     group = vim.api.nvim_create_augroup('userLspConfigs', {}),
     callback = function(args)
         local client = assert(vim.lsp.get_client_by_id(args.data.client_id))
-        vim.print('LSP started for buffer ' .. args.buf .. ' with client ID ' .. args.data.client_id)
-        vim.print('Client name: ' .. client.name)
-        vim.print('Client capabilities: ' .. vim.inspect(client.server_capabilities))
+        --- vim.print('LSP started for buffer ' .. args.buf .. ' with client ID ' .. args.data.client_id)
+        --- vim.print('Client name: ' .. client.name)
+        --- vim.print('Client capabilities: ' .. vim.inspect(client.server_capabilities))
 
         vim.keymap.set('n', '<leader>gd',       vim.lsp.buf.declaration,     {silent=true})
         vim.keymap.set('n', '<leader>gD',       vim.lsp.buf.definition,      {silent=true})

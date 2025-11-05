@@ -14,7 +14,7 @@ elif [[ "$ARCH" == "aarch64" || "$arch" == "arm64" ]]; then
     ARCH="arm64"
 fi
 echo "Detected Architecture: $ARCH"
-
+echo
 export PREFIX="$(echo ~/.local)"
 export BINDIR="$PREFIX/bin"
 export LIBDIR="$PREFIX/lib"
@@ -95,7 +95,6 @@ function download_url() {
         echo "Error: Neither curl nor wget is installed." >&2
         exit 1
     fi
-    echo "Done!"
 }
 
 local git_version="00.00.00"
@@ -127,7 +126,7 @@ else
     rm -rf "${version}" "${version}.tar.gz" tmp.html
     link_package "$PREFIX/soft/${version}"
 fi
-
+echo
 # Install JQ if not already installed
 local jq_version="0.00.00"
 if [[ "$(jq --version 2> /dev/null)" =~ ^jq-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
@@ -149,7 +148,7 @@ else
     rm -rf tmp.html
     link_package "$PREFIX/soft/$version";
 fi
-
+echo
 local ruby_version="0.00.00"
 if [[ "$(ruby --version 2>/dev/null)" =~ ruby\ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
     ruby_version="${match[1]}"
@@ -180,7 +179,7 @@ else
     rm -rf "$version" "$version.tar.gz" tmp.html
     link_package "$PREFIX/soft/$version"
 fi
-
+echo
 # local perl_version="0.00.00"
 # if [[ "$(perl --version 2> /dev/null)" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
 #     perl_version="${match[1]}"
@@ -231,6 +230,7 @@ else
     link_package "$PREFIX/soft/$version"
 fi
 
+echo
 which node 2> /dev/null
 if [[ $? -eq 0 ]]; then
     echo "Node.js is already installed."
@@ -244,6 +244,7 @@ else
     rm -rf install_nvm.sh
 fi
 
+echo
 which cargo 2> /dev/null
 if [[ $? -eq 0 ]]; then
     echo "Rust is already installed."
@@ -254,6 +255,7 @@ else
     rm -rf install_rustup.sh
 fi
 
+echo
 # Install uv if not already installed
 which uv 2> /dev/null
 if [[ $? -eq 0 ]]; then
@@ -277,6 +279,7 @@ if [[ ! -d $ZSH ]] then
     git clone 'https://github.com/zsh-users/zsh-syntax-highlighting' --depth=1 $ZSH/custom/plugins/zsh-syntax-highlighting
 fi
 
+echo
 local nvim_version="0.00.00"
 alias ll='ls -la'
 if [[ "$(nvim --version 2> /dev/null)" =~ NVIM\ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
