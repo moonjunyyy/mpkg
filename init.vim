@@ -2,6 +2,7 @@ source ~/.vimrc
 
 set completeopt+=menuone,noselect,popup
 let g:clipboard = 'osc52'
+
 " Set Python 3 interpreter with system path; Not a virtual environment
 " let g:python3_host_prog  = '/usr/bin/python'
 "
@@ -12,52 +13,9 @@ let g:clipboard = 'osc52'
 " let g:clang_library_path = '/usr/lib/llvm-20/lib/libclang.so'
 " let g:node_host_prog = '~/.nvm/versions/node/*/bin/neovim-node-host'
 
-lua << EOF
-do
-     -- Specifies where to install/use rocks.nvim
-    local install_location = vim.fs.joinpath(vim.fn.stdpath("data") --[[@as string]], "rocks")
-    -- Set up configuration options related to rocks.nvim (recommended to leave as default)
-    local rocks_config = {
-        rocks_path = vim.fs.normalize(install_location),
-    }
-    vim.g.rocks_nvim = rocks_config
-    local luarocks_path = {
-        vim.fs.joinpath(rocks_config.rocks_path, "share", "lua", "5.1", "?.lua"),
-	    vim.fs.joinpath(rocks_config.rocks_path, "share", "lua", "5.1", "?", "init.lua"),
-    }
-    package.path = package.path .. ";" .. table.concat(luarocks_path, ";")
-    local luarocks_cpath = {
-        vim.fs.joinpath(rocks_config.rocks_path, "lib", "lua", "5.1", "?.so"),
-	    vim.fs.joinpath(rocks_config.rocks_path, "lib64", "lua", "5.1", "?.so"),
-	    -- Remove the dylib and dll paths if you do not need macos or windows support
-	    vim.fs.joinpath(rocks_config.rocks_path, "lib", "lua", "5.1", "?.dylib"),
-	    vim.fs.joinpath(rocks_config.rocks_path, "lib64", "lua", "5.1", "?.dylib"),
-	    vim.fs.joinpath(rocks_config.rocks_path, "lib", "lua", "5.1", "?.dll"),
-	    vim.fs.joinpath(rocks_config.rocks_path, "lib64", "lua", "5.1", "?.dll"),
-    }
-    package.cpath = package.cpath .. ";" .. table.concat(luarocks_cpath, ";")
-    -- Add rocks.nvim to the runtimepath
-    vim.opt.runtimepath:append(vim.fs.joinpath(rocks_config.rocks_path, "lib", "luarocks", "rocks-5.1", "rocks.nvim", "*"))
-end
-if not pcall(require, "rocks") then
-    local rocks_location = vim.fs.joinpath(vim.fn.stdpath("cache") --[[@as string]], "rocks.nvim")
-    if not vim.uv.fs_stat(rocks_location) then
-        -- Pull down rocks.nvim
-        local url = "https://github.com/lumen-oss/rocks.nvim"
-        vim.fn.system({ "git", "clone", "--filter=blob:none", url, rocks_location })
-        -- Make sure the clone was successfull
-        assert(vim.v.shell_error == 0, "rocks.nvim installation failed. Try exiting and re-entering Neovim!")
-    end
-    -- If the clone was successful then source the bootstrapping script
-    vim.cmd.source(vim.fs.joinpath(rocks_location, "bootstrap.lua"))
-    vim.fn.delete(rocks_location, "rf")
-end
-EOF
-
 source ~/.config/nvim/autoload/plug.vim
 filetype off                  " required
 call plug#begin()
-Plug 'L3MON4D3/LuaSnip'
 Plug 'nvim-lua/plenary.nvim'
 Plug 'OXY2DEV/markview.nvim'
 Plug 'nvim-tree/nvim-tree.lua'
@@ -66,17 +24,12 @@ Plug 'catppuccin/nvim'
 Plug 'williamboman/mason.nvim'
 Plug 'williamboman/mason-lspconfig.nvim'
 Plug 'neovim/nvim-lspconfig'
-" Plug 'hrsh7th/nvim-cmp'
-" Plug 'hrsh7th/cmp-nvim-lsp'
-" Plug 'saadparwaiz1/cmp_luasnip'
 Plug 'nvim-lualine/lualine.nvim'
 Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
 Plug 'nvim-telescope/telescope.nvim', { 'branch': '0.1.x' }
 Plug 'preservim/tagbar'
 Plug 'tpope/vim-fugitive'
 Plug 'lewis6991/gitsigns.nvim'
-" Plug 'vim-airline/vim-airline'
-" Plug 'rip-rip/clang_complete'
 Plug 'github/copilot.vim'
 call plug#end()             " required
 filetype plugin indent on   " required
@@ -87,7 +40,6 @@ colorscheme catppuccin-mocha
 " lua scripts
 lua << EOF
 require('gitsigns').setup()
-require('luasnip').setup{}
 require('lualine').setup{ options = { theme = 'auto' } }
 
 --- Nvim Tree
