@@ -680,6 +680,7 @@ pkg_git_spec() {
     PKG_LISTING_URL="https://mirrors.edge.kernel.org/pub/software/scm/git/"
     PKG_TAG_PATTERN='git-[0-9]+\.[0-9]+\.[0-9]+'
     PKG_TARBALL_URL='https://mirrors.edge.kernel.org/pub/software/scm/git/git-${version}.tar.gz'
+    PKG_CONFIGURE_FLAGS=(--with-curl="${_PREFIX}" --with-openssl="${_PREFIX}")
     # Git does not support a separate object directory.
     PKG_INTREE=1
 }
