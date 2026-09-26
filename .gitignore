@@ -2,5 +2,6 @@
 /lua
 /lua_modules
 /.luarocks
-.claude
+.claude/
 ._*
+workdir/

@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+# mpkg — a small package manager for a user-owned prefix.
+#
+#   mpkg install workspace      bootstrap everything
+#   mpkg install git            install one package and its dependencies
+#   mpkg deps neovim            show what would be built, and in what order
+#   mpkg doctor                 check the prefix for the usual breakages
+#
+# Packages live in packages/<name>.sh. Each one inherits a base class with
+# mpkg_inherit and overrides only the stages that differ; see packages/README.
+
+set -o pipefail
+
+# mpkg needs bash 4+ (associative arrays, mapfile). macOS still ships 3.2 as
+# /bin/bash, so fall over to a newer one (Homebrew, MacPorts, our own prefix)
+# before anything fails in a confusing way.
+if (( BASH_VERSINFO[0] < 4 )); then
+    for _b in "${MPKG_PREFIX:-$HOME/.local}/bin/bash" /opt/homebrew/bin/bash \
+              /usr/local/bin/bash /opt/local/bin/bash; do
+        [[ -x "${_b}" ]] && "${_b}" -c '(( BASH_VERSINFO[0] >= 4 ))' 2>/dev/null \
+            && exec "${_b}" "$0" "$@"
+    done
+    echo "mpkg: bash 4 or newer is required (this is ${BASH_VERSION})." >&2
+    echo "mpkg: on macOS: install one (e.g. 'brew install bash') and re-run." >&2
+    exit 1
+fi
+
+# Follow symlinks to the real script: mpkg may be run through a link on PATH.
+# MPKG_ROOT is the directory holding mpkg/ and the configuration it installs
+# (nvim/): the repository checkout, or libexec/mpkg of an installed copy.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "${_self}" ]]; do
+    _link="$(readlink -- "${_self}")"
+    [[ "${_link}" == /* ]] || _link="$(dirname -- "${_self}")/${_link}"
+    _self="${_link}"
+done
+MPKG_ROOT="$(cd -- "$(dirname -- "${_self}")/.." && pwd -P)"
+unset _self _link
+MPKG_HOME="${MPKG_ROOT}/mpkg"
+MPKG_LIB="${MPKG_HOME}/lib"
+MPKG_PACKAGES="${MPKG_HOME}/packages"
+export MPKG_ROOT MPKG_HOME MPKG_PACKAGES
+
+MPKG_VERSION_STR="0.2.0"
+
+for _m in core util class db link registry depsolve engine venv; do
+    # shellcheck source=/dev/null
+    . "${MPKG_LIB}/${_m}.sh" || { echo "mpkg: cannot load lib/${_m}.sh" >&2; exit 1; }
+done
+unset _m
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+
+mpkg::usage() {
+    cat <<USAGE
+mpkg ${MPKG_VERSION_STR} — package manager for ${MPKG_PREFIX:-\$HOME/.local}
+
+usage: mpkg [options] <command> [arguments]
+
+commands:
+  install <pkg>...     resolve dependencies and install
+  remove <pkg>...      unlink and delete an installed package
+  upgrade [pkg]...     reinstall packages whose upstream version moved on
+  list                 installed packages
+  available            packages this checkout can build
+  info <pkg>           metadata, dependencies and install state
+  deps <pkg>           dependency tree
+  order <pkg>...       the resolved install order
+  link <pkg>           re-link an installed package into the prefix
+  unlink <pkg>         remove a package's links, keeping its files
+  relink               re-link everything (repairs a damaged prefix)
+  prune                delete links pointing at packages that are gone
+  adopt                register package trees already in soft/ into the database
+  doctor [--fix]       check the prefix for known breakages, optionally repair
+  env                  print the shell snippet for this prefix
+  log <pkg>            show the last build log
+  clean                empty the work directory
+  gc                   delete store trees nothing uses (asks first; -n to list)
+  help                 this text
+
+environments (independent views of the store; see README):
+  venv create <env> [pkg[@ver]...]   new environment, optionally with packages
+  venv add <env> <pkg[@ver]>...      link packages (and their deps) into it
+  venv rm <env> <pkg>...             unlink packages from it
+  venv update <env> [pkg...]         move pinned packages to the base version
+  venv list [env]                    environments, or one's packages
+  venv delete <env>                  delete it, freeing trees only it used
+  venv activate <env>                print the line to eval: eval "\$(mpkg venv activate <env>)"
+  venv run <env> <cmd> [args...]     run one command inside it
+
+options:
+  --prefix <dir>       install prefix (default \$HOME/.local, or \$MPKG_PREFIX)
+  -j, --jobs <n>       parallel make jobs (default: all cores)
+  -n, --dry-run        show what would happen, change nothing
+  -f, --force          rebuild the named packages even when up to date
+      --force-all      also rebuild dependencies that are already installed
+      --no-deps        operate on the named packages only
+      --with-optional  also install optional dependencies
+  -k, --keep-going     carry on after a package fails
+      --keep-work      leave the work directory behind for debugging
+      --fix            with 'doctor': repair what can be repaired
+      --isolated       with 'venv create': hide the base prefix when active
+  -v, --verbose        stream build output
+  -q, --quiet          only errors
+  -y, --yes            assume yes
+  -h, --help           this text
+USAGE
+}
+
+# ---------------------------------------------------------------------------
+# Option parsing
+# ---------------------------------------------------------------------------
+
+MPKG_DRY_RUN=0 MPKG_FORCE=0 MPKG_NO_DEPS=0 MPKG_WITH_OPT=0
+MPKG_KEEP_GOING=0 MPKG_KEEP_WORK=0 MPKG_ASSUME_YES=0 MPKG_FORCE_ALL=0 MPKG_FIX=0 MPKG_ISOLATED=0
+MPKG_JOBS=""
+
+declare -a ARGS=()
+while (( $# )); do
+    case "$1" in
+        --prefix)       MPKG_PREFIX="$2"; shift 2 ;;
+        --prefix=*)     MPKG_PREFIX="${1#*=}"; shift ;;
+        -j|--jobs)      MPKG_JOBS="$2"; shift 2 ;;
+        -j*)            MPKG_JOBS="${1#-j}"; shift ;;
+        -n|--dry-run)   MPKG_DRY_RUN=1; shift ;;
+        -f|--force)     MPKG_FORCE=1; shift ;;
+        --force-all)    MPKG_FORCE=1; MPKG_FORCE_ALL=1; shift ;;
+        --fix)          MPKG_FIX=1; shift ;;
+        --isolated)     MPKG_ISOLATED=1; shift ;;
+        --no-deps)      MPKG_NO_DEPS=1; shift ;;
+        --with-optional) MPKG_WITH_OPT=1; shift ;;
+        -k|--keep-going) MPKG_KEEP_GOING=1; shift ;;
+        --keep-work)    MPKG_KEEP_WORK=1; shift ;;
+        -v|--verbose)   MPKG_VERBOSE=1; shift ;;
+        -q|--quiet)     MPKG_QUIET=1; shift ;;
+        -y|--yes)       MPKG_ASSUME_YES=1; shift ;;
+        -h|--help)      ARGS=(help); shift ;;
+        --)             shift; ARGS+=("$@"); break ;;
+        -*)             echo "mpkg: unknown option $1" >&2; exit 2 ;;
+        *)              ARGS+=("$1"); shift
+                        # 'venv run <env> <cmd...>': the rest belongs to <cmd>.
+                        if [[ "${ARGS[0]}" == venv && "${ARGS[1]:-}" =~ ^(run|exec)$ ]] \
+                           && (( ${#ARGS[@]} == 3 )); then
+                            [[ "${1:-}" == -- ]] && shift
+                            ARGS+=("$@"); break
+                        fi ;;
+    esac
+done
+
+mpkg::core_init
+
+CMD="${ARGS[0]:-help}"
+[[ ${#ARGS[@]} -gt 0 ]] && ARGS=("${ARGS[@]:1}") || ARGS=()
+
+mpkg::need_args() {
+    (( ${#ARGS[@]} )) || { mpkg::err "${CMD}: needs at least one package name"; exit 2; }
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_list() {
+    local p v k
+    local n=0
+    while IFS= read -r p; do
+        v="$(mpkg::db_get "${p}" version)"
+        k="$(mpkg::db_get "${p}" kind)"
+        printf '%-16s %-14s %s\n' "${p}" "${v}" "${k}"
+        n=$(( n + 1 ))
+    done < <(mpkg::db_list)
+    (( n == 0 )) && mpkg::say "no packages installed under ${MPKG_PREFIX}"
+    return 0
+}
+
+cmd_available() {
+    local p mark title
+    while IFS= read -r p; do
+        mpkg::db_installed "${p}" && mark="*" || mark=" "
+        title="$(mpkg::meta "${p}" desc 2>/dev/null)"
+        [[ -z "${title}" ]] && title="$(mpkg::meta "${p}" title 2>/dev/null)"
+        printf '%s %-16s %s\n' "${mark}" "${p}" "${title}"
+    done < <(mpkg::available)
+}
+
+cmd_info() {
+    mpkg::need_args
+    local p="${ARGS[0]}"
+    mpkg::meta_load "${p}" || exit 1
+    printf '%-12s %s\n' "name:"    "${p}"
+    printf '%-12s %s\n' "title:"   "$(mpkg::meta "${p}" title)"
+    printf '%-12s %s\n' "kind:"    "$(mpkg::meta "${p}" kind)"
+    [[ -n "$(mpkg::meta "${p}" desc)" ]] && printf '%-12s %s\n' "summary:" "$(mpkg::meta "${p}" desc)"
+    [[ -n "$(mpkg::meta "${p}" home)" ]] && printf '%-12s %s\n' "homepage:" "$(mpkg::meta "${p}" home)"
+    printf '%-12s %s\n' "depends:" "$(mpkg::meta "${p}" deps)"
+    [[ -n "$(mpkg::meta "${p}" optdeps)" ]] && printf '%-12s %s\n' "optional:" "$(mpkg::meta "${p}" optdeps)"
+    [[ -n "$(mpkg::meta "${p}" reqs)"    ]] && printf '%-12s %s\n' "needs:"    "$(mpkg::meta "${p}" reqs)"
+    if mpkg::db_installed "${p}"; then
+        local dest files
+        dest="$(mpkg::db_dest "${p}")"
+        files="$(mpkg::db_files "${p}")"
+        printf '%-12s %s\n' "installed:" "$(mpkg::db_get "${p}" version) ($(mpkg::db_get "${p}" date))"
+        if [[ -n "${dest}" ]]; then
+            printf '%-12s %s\n' "tree:"  "${MPKG_SOFT}/${dest}"
+            printf '%-12s %s\n' "files:" "$( [[ -f "${files}" ]] && wc -l < "${files}" || echo 0 )"
+        else
+            printf '%-12s %s\n' "tree:"  "managed by the upstream installer"
+        fi
+    else
+        printf '%-12s %s\n' "installed:" "no (found on PATH: $(mpkg::probe_version "$(mpkg::meta "${p}" probe)"))"
+    fi
+    local r; r="$(mpkg::db_reverse_deps "${p}" | tr '\n' ' ')"
+    [[ -n "${r// /}" ]] && printf '%-12s %s\n' "needed by:" "${r}"
+    return 0
+}
+
+cmd_deps() {
+    mpkg::need_args
+    mpkg::dep_tree "${ARGS[0]}"
+}
+
+cmd_order() {
+    mpkg::need_args
+    mpkg::resolve "${ARGS[@]}" || exit 1
+    printf '%s\n' "${MPKG_ORDER[@]}"
+}
+
+cmd_install() {
+    mpkg::need_args
+    mpkg::install "${ARGS[@]}"
+}
+
+cmd_remove() {
+    mpkg::need_args
+    local p rc=0
+    for p in "${ARGS[@]}"; do
+        mpkg::remove_one "${p}" || rc=1
+    done
+    return "${rc}"
+}
+
+cmd_upgrade() { mpkg::upgrade "${ARGS[@]}"; }
+
+cmd_link() {
+    mpkg::need_args
+    local p dest
+    for p in "${ARGS[@]}"; do
+        dest="$(mpkg::db_dest "${p}")"
+        [[ -n "${dest}" ]] || { mpkg::err "${p} is not installed"; return 1; }
+        mpkg::head "linking ${p}"
+        mpkg::link "${p}" "${dest}" || return 1
+    done
+}
+
+cmd_unlink() {
+    mpkg::need_args
+    local p
+    for p in "${ARGS[@]}"; do
+        mpkg::head "unlinking ${p}"
+        mpkg::unlink "${p}"
+    done
+}
+
+cmd_relink() {
+    local p dest
+    while IFS= read -r p; do
+        dest="$(mpkg::db_dest "${p}")"
+        [[ -n "${dest}" && -d "${MPKG_SOFT}/${dest}" ]] || continue
+        mpkg::head "relinking ${p}"
+        mpkg::unlink "${p}"
+        mpkg::link "${p}" "${dest}" || mpkg::warn "${p}: relink incomplete"
+    done < <(mpkg::db_list)
+}
+
+cmd_prune() { mpkg::prune_links; }
+
+# Take ownership of trees that are already sitting in $MPKG_SOFT but predate
+# the database -- the state left behind by the original install.sh.
+cmd_adopt() {
+    local dir base stem version pkg probe best
+    declare -A chosen=() chosen_ver=()
+
+    shopt -s nullglob
+    for dir in "${MPKG_SOFT}"/*/; do
+        base="$(basename "${dir}")"
+        stem="${base%-*}"
+        version="${base##*-}"
+        [[ "${stem}" == "${base}" ]] && continue
+
+        pkg=""
+        if mpkg::exists "${stem}"; then
+            pkg="${stem}"
+        else
+            # Trees are named after the binary (nvim-0.12.5), packages after
+            # the project (neovim); match on the probe command.
+            while IFS= read -r probe; do
+                [[ "$(mpkg::meta "${probe}" probe 2>/dev/null)" == "${stem}" ]] && { pkg="${probe}"; break; }
+            done < <(mpkg::available)
+        fi
+        [[ -z "${pkg}" ]] && { mpkg::warn "no package matches ${base}; skipping"; continue; }
+
+        best="${chosen_ver[$pkg]:-}"
+        if [[ -z "${best}" || "$(mpkg::vercmp "${version}" "${best}")" == "1" ]]; then
+            chosen[$pkg]="${base}"
+            chosen_ver[$pkg]="${version}"
+        fi
+    done
+    shopt -u nullglob
+
+    (( ${#chosen[@]} )) || { mpkg::say "nothing to adopt under ${MPKG_SOFT}"; return 0; }
+
+    for pkg in "${!chosen[@]}"; do
+        if [[ ${MPKG_DRY_RUN} -eq 1 ]]; then
+            mpkg::say "  would adopt ${pkg} ${chosen_ver[$pkg]} from ${chosen[$pkg]}"
+            continue
+        fi
+        mpkg::meta_load "${pkg}" >/dev/null 2>&1
+        mpkg::db_put "${pkg}" "${chosen_ver[$pkg]}" "${chosen[$pkg]}" \
+                     "$(mpkg::meta "${pkg}" kind)" ${MPKG_META_DEPS[$pkg]:-}
+        mpkg::ok "adopted ${pkg} ${chosen_ver[$pkg]} (${chosen[$pkg]})"
+    done
+    mpkg::say ""
+    mpkg::say "Run 'mpkg relink' to rebuild the symlinks for these packages."
+}
+
+cmd_clean() {
+    [[ -d "${MPKG_WORK}" ]] || { mpkg::say "work directory is already gone"; return 0; }
+    mpkg::confirm "delete ${MPKG_WORK}?" || return 0
+    rm -rf "${MPKG_WORK:?}"
+    mkdir -p "${MPKG_WORK}"
+    mpkg::say "work directory emptied"
+}
+
+cmd_gc() { mpkg::store_gc; }
+
+cmd_venv() {
+    local sub="${ARGS[0]:-list}" env="${ARGS[1]:-}"
+    local -a rest=("${ARGS[@]:2}")
+    case "${sub}" in
+        list|ls)      mpkg::venv_list "${env}"; return ;;
+    esac
+    [[ -n "${env}" ]] || { mpkg::err "venv ${sub}: name an environment"; exit 2; }
+    case "${sub}" in
+        create|new)   mpkg::venv_create "${env}" "${rest[@]}" ;;
+        add|install)  mpkg::venv_add "${env}" "${rest[@]}" ;;
+        rm|remove)    mpkg::venv_remove "${env}" "${rest[@]}" ;;
+        update|up)    mpkg::venv_update "${env}" "${rest[@]}" ;;
+        delete|del)   mpkg::venv_delete "${env}" ;;
+        activate)
+            mpkg::venv_need "${env}" || exit 1
+            printf '. %q\n' "$(mpkg::venv_dir "${env}")/activate" ;;
+        run|exec)
+            mpkg::venv_need "${env}" || exit 1
+            (( ${#rest[@]} )) || { mpkg::err "venv run: name a command"; exit 2; }
+            MPKG_VENV_NO_PROMPT=1 exec bash -c '. "$0" && exec "$@"' \
+                "$(mpkg::venv_dir "${env}")/activate" "${rest[@]}" ;;
+        *) mpkg::err "unknown venv command '${sub}'"; exit 2 ;;
+    esac
+}
+
+cmd_log() {
+    mpkg::need_args
+    local f="${MPKG_LOGDIR}/${ARGS[0]}.log"
+    [[ -f "${f}" ]] || { mpkg::err "no log for ${ARGS[0]}"; return 1; }
+    cat "${f}"
+}
+
+cmd_env() {
+    local f="${MPKG_PREFIX}/share/mpkg/env.sh"
+    if [[ -f "${f}" ]]; then
+        cat "${f}"
+    else
+        mpkg::warn "no env file yet — run 'mpkg install shell-config'"
+        printf 'export PATH="%s/bin:$PATH"\n' "${MPKG_PREFIX}"
+        printf 'export LD_LIBRARY_PATH="%s/lib:%s/lib64:$LD_LIBRARY_PATH"\n' "${MPKG_PREFIX}" "${MPKG_PREFIX}"
+    fi
+}
+
+cmd_doctor() {
+    local problems=0 fix="${MPKG_FIX}"
+    mpkg::head "prefix"
+    mpkg::say "  ${MPKG_PREFIX}   (os=${_OS} arch=${_ARCH} jobs=${_NPROCESSORS})"
+
+    mpkg::head "build tools"
+    local t
+    for t in cc make tar; do
+        if command -v "${t}" >/dev/null 2>&1; then mpkg::ok "${t}"
+        else mpkg::err "${t} is missing"; problems=$(( problems + 1 )); fi
+    done
+
+    mpkg::head "trust store"
+    if [[ -n "${MPKG_CA_BUNDLE}" ]]; then
+        mpkg::ok "CA bundle: ${MPKG_CA_BUNDLE}"
+    else
+        mpkg::err "no CA bundle found; every https download will fail verification"
+        problems=$(( problems + 1 ))
+    fi
+    if [[ -e "${MPKG_PREFIX}/ssl/cert.pem" ]]; then
+        mpkg::ok "openssl default CAfile is present"
+    elif mpkg::db_installed openssl; then
+        if [[ ${fix} -eq 1 && -n "${MPKG_CA_BUNDLE}" ]]; then
+            mkdir -p "${MPKG_PREFIX}/ssl/certs"
+            ln -sf "${MPKG_CA_BUNDLE}" "${MPKG_PREFIX}/ssl/cert.pem"
+            mpkg::ok "repaired: ${MPKG_PREFIX}/ssl/cert.pem -> ${MPKG_CA_BUNDLE}"
+        else
+            mpkg::err "${MPKG_PREFIX}/ssl/cert.pem is missing (run: mpkg doctor --fix)"
+            problems=$(( problems + 1 ))
+        fi
+    fi
+
+    mpkg::head "shared libraries"
+    local l
+    for l in curl ssl crypto; do
+        if mpkg::have_shared_lib "${l}"; then
+            mpkg::ok "lib${l}.so is linkable"
+        elif mpkg::db_installed curl || mpkg::db_installed openssl; then
+            if [[ ${fix} -eq 1 ]]; then
+                mpkg::warn "lib${l}.so missing; relinking"
+                cmd_relink >/dev/null
+                mpkg::have_shared_lib "${l}" && mpkg::ok "repaired lib${l}.so" \
+                    || { mpkg::err "lib${l}.so still missing"; problems=$(( problems + 1 )); }
+            else
+                mpkg::err "lib${l}.so is missing from the prefix (run: mpkg doctor --fix)"
+                problems=$(( problems + 1 ))
+            fi
+        fi
+    done
+
+    mpkg::head "git https support"
+    local g="${MPKG_PREFIX}/bin/git"
+    if [[ -x "${g}" ]]; then
+        if [[ -e "$("${g}" --exec-path)/git-remote-https" ]]; then
+            mpkg::ok "git-remote-https is present"
+        else
+            mpkg::err "this git cannot speak https (no git-remote-https)"
+            mpkg::err "fix: mpkg relink && mpkg install --force git"
+            problems=$(( problems + 1 ))
+        fi
+    else
+        mpkg::say "  no git installed in the prefix"
+    fi
+
+    mpkg::head "database"
+    local p dest broken=0
+    while IFS= read -r p; do
+        dest="$(mpkg::db_dest "${p}")"
+        [[ -z "${dest}" ]] && continue
+        if [[ ! -d "${MPKG_SOFT}/${dest}" ]]; then
+            mpkg::err "${p}: recorded tree ${dest} is gone"
+            broken=$(( broken + 1 ))
+        fi
+    done < <(mpkg::db_list)
+    (( broken == 0 )) && mpkg::ok "all recorded package trees exist"
+    problems=$(( problems + broken ))
+
+    local e ne=0
+    broken=0
+    while IFS= read -r e; do
+        ne=$(( ne + 1 ))
+        while IFS= read -r p; do
+            dest="$(mpkg::venv_get "${e}" "${p}" dest)"
+            if [[ ! -d "${MPKG_SOFT}/${dest}" ]]; then
+                mpkg::err "environment ${e}: ${p} tree ${dest} is gone (mpkg venv update ${e} ${p})"
+                broken=$(( broken + 1 ))
+            fi
+        done < <(mpkg::venv_pkgs "${e}")
+    done < <(mpkg::venv_names)
+    if (( ne > 0 )); then
+        mpkg::head "environments"
+        (( broken == 0 )) && mpkg::ok "${ne} environment(s), every pinned tree present"
+    fi
+    problems=$(( problems + broken ))
+
+    mpkg::say ""
+    if (( problems == 0 )); then
+        mpkg::say "${C_GRN}No problems found.${C_RST}"
+    else
+        mpkg::say "${C_RED}${problems} problem(s) found.${C_RST}"
+        return 1
+    fi
+}
+
+case "${CMD}" in
+    install|i)          cmd_install ;;
+    remove|rm|uninstall) cmd_remove ;;
+    upgrade|up)         cmd_upgrade ;;
+    list|ls)            cmd_list ;;
+    available|search|avail) cmd_available ;;
+    info|show)          cmd_info ;;
+    deps|tree)          cmd_deps ;;
+    order|resolve)      cmd_order ;;
+    link)               cmd_link ;;
+    unlink)             cmd_unlink ;;
+    relink)             cmd_relink ;;
+    prune)              cmd_prune ;;
+    adopt)              cmd_adopt ;;
+    clean)              cmd_clean ;;
+    gc)                 cmd_gc ;;
+    venv|envs)          cmd_venv ;;
+    log)                cmd_log ;;
+    env)                cmd_env ;;
+    doctor|check)       cmd_doctor ;;
+    version|--version)  echo "mpkg ${MPKG_VERSION_STR}" ;;
+    help|"")            mpkg::usage ;;
+    *)                  mpkg::err "unknown command '${CMD}'"; mpkg::usage; exit 2 ;;
+esac
