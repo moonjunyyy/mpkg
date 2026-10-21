@@ -21,7 +21,11 @@ mpkg::db_dest()    { mpkg::db_get "$1" dest; }
 
 mpkg::db_put() {
     local name="$1" version="$2" dest="$3" kind="$4"; shift 4
-    local rec; rec="$(mpkg::db_record "${name}")"
+    local rec tmp
+    rec="$(mpkg::db_record "${name}")"
+    # Written aside and renamed, so an interrupted write never leaves a
+    # truncated record. The dot name keeps db_list's glob from seeing it.
+    tmp="${MPKG_DB}/.${name}.tmp.$$"
     {
         printf 'name=%s\n'     "${name}"
         printf 'version=%s\n'  "${version}"
@@ -30,7 +34,7 @@ mpkg::db_put() {
         printf 'depends=%s\n'  "$*"
         printf 'date=%s\n'     "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf 'prefix=%s\n'   "${MPKG_PREFIX}"
-    } > "${rec}"
+    } > "${tmp}" && mv -f "${tmp}" "${rec}"
 }
 
 mpkg::db_forget() {

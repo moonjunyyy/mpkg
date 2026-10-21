@@ -5,6 +5,8 @@ MPKG_DESC="Distributed version control system"
 MPKG_HOMEPAGE="https://git-scm.com/"
 MPKG_PROBE_CMD="git"
 MPKG_DEPENDS=(curl openssl)
+# Only with --with-optional: git builds without Rust, see mpkg::git_setup_rust.
+MPKG_OPTDEPENDS=(rust)
 MPKG_REQUIRES_CMD=(cc make)
 
 MPKG_LISTING_URL="https://mirrors.edge.kernel.org/pub/software/scm/git/"
@@ -46,8 +48,28 @@ mpkg::git_setup_curl() {
     fi
 }
 
+# Since 2.52 git compiles Rust code (libgitcore.a, via `cargo build`) unless
+# the make variable NO_RUST is set; configure has no switch for it. A machine
+# without a working cargo -- none at all, or only rustup's shim with no
+# toolchain installed -- would fail the build, so Rust is used only when cargo
+# really runs. MPKG_GIT_RUST=yes|no overrides the probe. (Git 3.0 makes Rust
+# mandatory; then this becomes a hard dependency on the rust package.)
+mpkg::git_setup_rust() {
+    local want="${MPKG_GIT_RUST:-auto}"
+    if [[ "${want}" == auto ]]; then
+        cargo --version >/dev/null 2>&1 && want=yes || want=no
+    fi
+    if [[ "${want}" == yes ]]; then
+        mpkg::step "building with Rust ($(cargo --version 2>/dev/null))"
+    else
+        mpkg::step "building without Rust (NO_RUST)"
+        MPKG_MAKE_VARS+=(NO_RUST=YesPlease)
+    fi
+}
+
 mpkg_prepare() {
     mpkg::git_setup_curl
+    mpkg::git_setup_rust
     mpkg_super prepare
 }
 

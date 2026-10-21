@@ -27,7 +27,7 @@ mpkg_discover() {
     mpkg::download "${MPKG_LISTING_URL}" "${listing}" || return 1
 
     local -a minors
-    mapfile -t minors < <(grep -oE '[0-9]+\.[0-9]+/' "${listing}" | sort -Vru)
+    mapfile -t minors < <(grep -oE '[0-9]+\.[0-9]+/' "${listing}" | mpkg::vsort -r -u)
 
     local ver newest
     for ver in "${minors[@]}"; do

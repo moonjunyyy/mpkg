@@ -20,15 +20,19 @@ MPKG_MAKE_VARS=(
 )
 
 mpkg_describe() {
-    if [[ "${_OS}" == "macos" ]]; then
-        MPKG_MAKE_TARGETS=(macosx)
-    else
-        MPKG_MAKE_TARGETS=(linux)
-        # MYCFLAGS/MYLDFLAGS, not CFLAGS/LDFLAGS: overriding CFLAGS from the
-        # command line would drop Lua's own SYSCFLAGS (-DLUA_USE_LINUX).
-        MPKG_MAKE_VARS=('MYCFLAGS=${_CFLAGS} -fPIC' 'MYLDFLAGS=${_LDFLAGS}'
-                        'INSTALL_TOP=${MPKG_SOFT}/${tag}')
-    fi
+    # Lua's own platform targets; `posix` is the portable fallback.
+    case "${_OS}" in
+        macos)                  MPKG_MAKE_TARGETS=(macosx) ;;
+        linux)                  MPKG_MAKE_TARGETS=(linux) ;;
+        freebsd)                MPKG_MAKE_TARGETS=(freebsd) ;;
+        openbsd|netbsd|dragonfly) MPKG_MAKE_TARGETS=(bsd) ;;
+        sunos)                  MPKG_MAKE_TARGETS=(solaris) ;;
+        *)                      MPKG_MAKE_TARGETS=(posix) ;;
+    esac
+    # MYCFLAGS/MYLDFLAGS, not CFLAGS/LDFLAGS: overriding CFLAGS from the
+    # command line would drop Lua's own SYSCFLAGS (-DLUA_USE_LINUX, ...).
+    MPKG_MAKE_VARS=('MYCFLAGS=${_CFLAGS} -fPIC' 'MYLDFLAGS=${_LDFLAGS}'
+                    'INSTALL_TOP=${MPKG_SOFT}/${tag}')
 }
 
 # Without LUA_USE_LINUX / LUA_USE_MACOSX, Lua falls back to plain C89: no

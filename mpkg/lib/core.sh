@@ -21,11 +21,22 @@ mpkg::detect_arch() {
     esac
 }
 
+# nproc is GNU; getconf covers Linux, macOS and the BSDs; sysctl is the last
+# resort on BSDs whose getconf lacks the variable.
 mpkg::detect_jobs() {
-    if [[ "${_OS}" == "macos" ]]; then
-        sysctl -n hw.ncpu 2>/dev/null || echo 1
-    else
-        nproc 2>/dev/null || echo 1
+    local n
+    n="$(nproc 2>/dev/null)" \
+        || n="$(getconf _NPROCESSORS_ONLN 2>/dev/null)" \
+        || n="$(sysctl -n hw.ncpu 2>/dev/null)"
+    [[ "${n}" =~ ^[0-9]+$ && "${n}" -gt 0 ]] && echo "${n}" || echo 1
+}
+
+# Most source trees assume GNU make. On the BSDs `make` is bmake and GNU make
+# is `gmake`; use the GNU one wherever it is.
+mpkg::detect_make() {
+    if make --version 2>/dev/null | grep -q 'GNU Make'; then echo make
+    elif command -v gmake >/dev/null 2>&1;             then echo gmake
+    else echo make
     fi
 }
 
@@ -135,6 +146,10 @@ mpkg::core_init() {
     _OS="${MPKG_OS:-$(mpkg::detect_os)}"
     _ARCH="${MPKG_ARCH:-$(mpkg::detect_arch)}"
     _NPROCESSORS="${MPKG_JOBS:-$(mpkg::detect_jobs)}"
+    # Exported as MAKE too, which autoconf-generated configure scripts honour.
+    MPKG_MAKE="${MPKG_MAKE:-$(mpkg::detect_make)}"
+    MAKE="${MPKG_MAKE}"
+    export MPKG_MAKE MAKE
     # Other spellings release assets use: x86_64/aarch64, linux/darwin and the
     # Rust target triple (musl on Linux: static, so it runs on any distro).
     _UARCH="${_ARCH/amd64/x86_64}"; _UARCH="${_UARCH/arm64/aarch64}"
@@ -166,18 +181,22 @@ mpkg::core_init() {
     environment_prepend "PATH"            "${MPKG_PREFIX}/bin"
     environment_prepend "CPATH"           "${MPKG_PREFIX}/include"
     environment_prepend "CXXPATH"         "${MPKG_PREFIX}/include"
-    environment_prepend "LIBRARY_PATH"    "/usr/lib"
-    environment_prepend "LIBRARY_PATH"    "/usr/lib64"
+    # The system library directories are the toolchain's defaults and are left
+    # off: on macOS /usr/lib64 does not exist and /usr/lib holds no linkable
+    # libraries (they live in the SDK), and Apple's ld warns about both.
     environment_prepend "LIBRARY_PATH"    "${MPKG_PREFIX}/lib64"
     environment_prepend "LIBRARY_PATH"    "${MPKG_PREFIX}/lib"
-    environment_prepend "LD_LIBRARY_PATH" "/usr/lib"
-    environment_prepend "LD_LIBRARY_PATH" "/usr/lib64"
-    environment_prepend "LD_LIBRARY_PATH" "${MPKG_PREFIX}/lib64"
-    environment_prepend "LD_LIBRARY_PATH" "${MPKG_PREFIX}/lib"
+    # dyld ignores LD_LIBRARY_PATH; macOS binaries find the prefix via rpath.
+    if [[ "${_OS}" != "macos" ]]; then
+        environment_prepend "LD_LIBRARY_PATH" "${MPKG_PREFIX}/lib64"
+        environment_prepend "LD_LIBRARY_PATH" "${MPKG_PREFIX}/lib"
+    fi
     environment_prepend "MANPATH"         "/usr/share/man"
     environment_prepend "MANPATH"         "${MPKG_PREFIX}/share/man"
-    environment_prepend "PKG_CONFIG_PATH" "/usr/lib/pkgconfig"
-    environment_prepend "PKG_CONFIG_PATH" "/usr/lib64/pkgconfig"
+    local d
+    for d in /usr/lib/pkgconfig /usr/lib64/pkgconfig /usr/libdata/pkgconfig; do
+        [[ -d "${d}" ]] && environment_prepend "PKG_CONFIG_PATH" "${d}"
+    done
     environment_prepend "PKG_CONFIG_PATH" "${MPKG_PREFIX}/lib64/pkgconfig"
     environment_prepend "PKG_CONFIG_PATH" "${MPKG_PREFIX}/lib/pkgconfig"
 
@@ -189,13 +208,94 @@ mpkg::core_init() {
     [[ -n "${MPKG_CA_PATH}"   ]] && export SSL_CERT_DIR="${MPKG_CA_PATH}"
 }
 
+# ---------------------------------------------------------------------------
+# Locking
+# ---------------------------------------------------------------------------
+
+# One mutating mpkg per prefix at a time: two concurrent runs share the work
+# directory and race on the database and the symlink farm. mkdir is atomic,
+# including on NFS, which flock is not. The lock records host and pid, so a
+# lock left by a crashed run on this host is taken over; one held from another
+# host is never guessed at.
+mpkg::lock() {
+    [[ -n "${_MPKG_LOCKED:-}" ]] && return 0   # held by us or by our parent mpkg
+    local lock="${MPKG_STATE}/lock" host pid me
+    me="$(hostname 2>/dev/null || uname -n)"
+    mkdir -p "${MPKG_STATE}" 2>/dev/null
+    if ! mkdir "${lock}" 2>/dev/null; then
+        # No owner yet: the other run may be between its mkdir and the write.
+        [[ -f "${lock}/owner" ]] || sleep 1
+        host="$(sed -n 's/^host=//p' "${lock}/owner" 2>/dev/null)"
+        pid="$( sed -n 's/^pid=//p'  "${lock}/owner" 2>/dev/null)"
+        if [[ -n "${host}" && "${host}" != "${me}" ]]; then
+            mpkg::die "${MPKG_PREFIX} is locked by mpkg on ${host} (pid ${pid:-?}); if that run is gone: rm -rf ${lock}"
+        fi
+        if [[ -n "${pid}" ]] && mpkg::pid_alive "${pid}"; then
+            mpkg::die "another mpkg (pid ${pid}) is working on ${MPKG_PREFIX}"
+        fi
+        mpkg::warn "taking over the stale lock of pid ${pid:-?}"
+        rm -rf "${lock}"
+        mkdir "${lock}" 2>/dev/null || mpkg::die "cannot lock ${MPKG_PREFIX} (${lock})"
+    fi
+    printf 'host=%s\npid=%s\n' "${me}" "$$" > "${lock}/owner"
+    _MPKG_LOCKED="${lock}"
+    export _MPKG_LOCKED
+    _MPKG_LOCK_OWNER=$$
+    trap 'mpkg::unlock' EXIT
+    trap 'mpkg::err "interrupted"; exit 130' INT TERM HUP
+}
+
+# kill -0 fails for a live process of another user too; EPERM still means alive.
+mpkg::pid_alive() {
+    local out
+    out="$(kill -0 "$1" 2>&1)" && return 0
+    [[ "${out}" == *[Pp]ermitted* || "${out}" == *EPERM* ]]
+}
+
+mpkg::unlock() {
+    [[ -n "${_MPKG_LOCKED:-}" && "${_MPKG_LOCK_OWNER:-}" == "$$" ]] || return 0
+    rm -rf "${_MPKG_LOCKED}"
+    _MPKG_LOCKED=""
+}
+
+# Is <dir> one the compiler and linker search anyway? Passing those again is
+# at best noise; -I/usr/include breaks libstdc++'s #include_next, and on macOS
+# -L/usr/lib64 draws a "directory not found" warning from ld.
+mpkg::is_system_dir() {
+    case "${1%/}" in
+        /lib|/lib64|/usr/lib|/usr/lib64|/usr/include) return 0 ;;
+    esac
+    return 1
+}
+
+# path_flags <flag> <colon-list> — one <flag><dir> per directory that exists
+# and is not a system default, each directory once, in list order.
+mpkg::path_flags() {
+    local flag="$1" d seen=":" out=""
+    local -a dirs
+    IFS=':' read -r -a dirs <<< "$2"
+    for d in "${dirs[@]}"; do
+        [[ -n "${d}" && -d "${d}" ]] || continue
+        mpkg::is_system_dir "${d}" && continue
+        [[ "${seen}" == *":${d}:"* ]] && continue
+        seen="${seen}${d}:"
+        out="${out}${flag}${d} "
+    done
+    printf '%s' "${out}"
+}
+
 # Recomputed before every package: earlier installs extend CPATH / LIBRARY_PATH.
 # -rpath is what lets a freshly built git find libcurl.so.4 without the caller
 # having LD_LIBRARY_PATH set.
+#
+# Every flag must be clean on every linker: Ruby's configure, among others,
+# treats any linker warning as an invalid LDFLAGS, and Apple's ld warns about
+# missing -L directories and repeated -rpath entries.
 compute_build_flags() {
-    _CFLAGS=$(  printf '%s' "${CPATH:-}"        | tr ':' '\n' | grep -v '^$' | sed 's/^/-I/' | tr '\n' ' ')
-    _CXXFLAGS=$(printf '%s' "${CXXPATH:-}"      | tr ':' '\n' | grep -v '^$' | sed 's/^/-I/' | tr '\n' ' ')
-    _LDFLAGS=$( printf '%s' "${LIBRARY_PATH:-}" | tr ':' '\n' | grep -v '^$' | sed 's/^/-L/' | tr '\n' ' ')
-    _LDFLAGS="${_LDFLAGS}-Wl,-rpath,${MPKG_PREFIX}/lib -Wl,-rpath,${MPKG_PREFIX}/lib64"
+    _CFLAGS="$(  mpkg::path_flags -I "${CPATH:-}")"
+    _CXXFLAGS="$(mpkg::path_flags -I "${CXXPATH:-}")"
+    _LDFLAGS="$( mpkg::path_flags -L "${LIBRARY_PATH:-}")"
+    _LDFLAGS="${_LDFLAGS}$(mpkg::path_flags -Wl,-rpath, "${MPKG_PREFIX}/lib:${MPKG_PREFIX}/lib64")"
+    _CFLAGS="${_CFLAGS% }"; _CXXFLAGS="${_CXXFLAGS% }"; _LDFLAGS="${_LDFLAGS% }"
     export _CFLAGS _CXXFLAGS _LDFLAGS
 }

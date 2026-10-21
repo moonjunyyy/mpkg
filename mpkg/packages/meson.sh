@@ -29,7 +29,8 @@ mpkg_install() {
     mkdir -p "${dest}/libexec/meson" || return 1
     cp -a "${MPKG_ASSET_STEM}/meson.py" "${MPKG_ASSET_STEM}/mesonbuild" "${dest}/libexec/meson/" || return 1
     [[ -f "${MPKG_ASSET_STEM}/man/meson.1" ]] \
-        && install -D -m 644 "${MPKG_ASSET_STEM}/man/meson.1" "${dest}/share/man/man1/meson.1"
+        && mkdir -p "${dest}/share/man/man1" \
+        && install -m 644 "${MPKG_ASSET_STEM}/man/meson.1" "${dest}/share/man/man1/meson.1"
 
     cat > "${dest}/bin/meson" <<LAUNCHER
 #!/bin/sh

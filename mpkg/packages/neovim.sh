@@ -16,7 +16,7 @@ mpkg_discover() {
     mpkg::download "https://api.github.com/repos/neovim/neovim/releases" "${releases}" || return 1
 
     MPKG_VERSION="$(jq -r '.[].tag_name' "${releases}" \
-        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | head -n1)"
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | mpkg::vsort -r | head -n1)"
     MPKG_VERSION="${MPKG_VERSION#v}"
     [[ -n "${MPKG_VERSION}" ]] || { mpkg::err "no stable Neovim release found"; return 1; }
     MPKG_TAG="v${MPKG_VERSION}"

@@ -48,7 +48,24 @@ vim.lsp.config('pyright', {
     },
 })
 
+-- markdown-oxide treats its root as a notes vault, indexes all of it, and
+-- holds a lock on it: with the default root ('.git') every repository became a
+-- vault, and a second nvim in the same repository failed with
+-- "Failed to get VAULT lock". Only start it inside real vaults.
+vim.lsp.config('markdown_oxide', {
+    root_dir = function(buf, on_dir)
+        local root = vim.fs.root(buf, { '.obsidian', '.moxide.toml' })
+        if root then on_dir(root) end
+    end,
+})
+
 local group = vim.api.nvim_create_augroup('user_lsp', { clear = true })
+
+-- One augroup per buffer and feature, recreated (clear = true) on every
+-- attach: a second server, or :LspRestart, then cannot stack duplicates.
+local function buf_group(feature, buf)
+    return vim.api.nvim_create_augroup(('user_lsp_%s_%d'):format(feature, buf), { clear = true })
+end
 
 vim.api.nvim_create_autocmd('LspAttach', {
     group = group,
@@ -89,25 +106,26 @@ vim.api.nvim_create_autocmd('LspAttach', {
             if vim.lsp.codelens.enable then -- Neovim 0.12+
                 vim.lsp.codelens.enable(true, { bufnr = buf })
             else
-                vim.lsp.codelens.refresh({ bufnr = buf })
                 vim.api.nvim_create_autocmd({ 'BufEnter', 'CursorHold', 'InsertLeave' }, {
-                    group = group,
+                    group = buf_group('codelens', buf),
                     buffer = buf,
                     callback = function() vim.lsp.codelens.refresh({ bufnr = buf }) end,
                 })
+                vim.lsp.codelens.refresh({ bufnr = buf })
             end
             map('<leader>lR', vim.lsp.codelens.run, 'Run code lens')
         end
 
         -- Highlight other uses of the symbol under the cursor.
         if client:supports_method('textDocument/documentHighlight', buf) then
+            local g = buf_group('highlight', buf)
             vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
-                group = group,
+                group = g,
                 buffer = buf,
                 callback = vim.lsp.buf.document_highlight,
             })
             vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
-                group = group,
+                group = g,
                 buffer = buf,
                 callback = vim.lsp.buf.clear_references,
             })
@@ -115,10 +133,27 @@ vim.api.nvim_create_autocmd('LspAttach', {
     end,
 })
 
+-- When a server goes away, drop a feature's autocmds only if no other server
+-- on the buffer still provides it. (Clearing them all made highlights and code
+-- lenses stop for every server whenever any one of them exited.)
 vim.api.nvim_create_autocmd('LspDetach', {
     group = group,
     callback = function(args)
-        vim.lsp.buf.clear_references()
-        vim.api.nvim_clear_autocmds({ group = group, buffer = args.buf })
+        local buf, gone = args.buf, args.data.client_id
+        local function still(method)
+            for _, c in ipairs(vim.lsp.get_clients({ bufnr = buf })) do
+                if c.id ~= gone and c:supports_method(method, buf) then return true end
+            end
+            return false
+        end
+        if not still('textDocument/documentHighlight') then
+            pcall(vim.api.nvim_del_augroup_by_name, ('user_lsp_highlight_%d'):format(buf))
+            if vim.api.nvim_buf_is_valid(buf) then
+                vim.api.nvim_buf_call(buf, vim.lsp.buf.clear_references)
+            end
+        end
+        if not still('textDocument/codeLens') then
+            pcall(vim.api.nvim_del_augroup_by_name, ('user_lsp_codelens_%d'):format(buf))
+        end
     end,
 })

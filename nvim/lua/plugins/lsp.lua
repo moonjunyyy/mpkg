@@ -14,8 +14,11 @@ return {
         dependencies = { 'mason-org/mason.nvim', 'neovim/nvim-lspconfig' },
         opts = {
             ensure_installed = require('config.languages').servers,
-            -- vim.lsp.enable() every server Mason has installed.
-            automatic_enable = true,
+            -- vim.lsp.enable() the servers languages.lua lists -- not every one
+            -- Mason happens to have installed: leftovers (pylsp, basics_ls, ...)
+            -- otherwise attach next to the intended server, and a Python buffer
+            -- ends up with pyright and pylsp both reporting diagnostics.
+            automatic_enable = require('config.languages').servers,
         },
     },
 

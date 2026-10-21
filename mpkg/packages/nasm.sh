@@ -21,7 +21,7 @@ mpkg_discover() {
         MPKG_TAG="nasm-${ver}"
         mpkg::url_exists "$(mpkg::render "${MPKG_TARBALL_URL}")" && return 0
     done < <(grep -oE 'href="[0-9]+\.[0-9]+(\.[0-9]+)?/"' "${listing}" \
-             | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | sort -Vru)
+             | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | mpkg::vsort -r -u)
     mpkg::err "nasm: no usable release found at ${MPKG_LISTING_URL}"
     return 1
 }

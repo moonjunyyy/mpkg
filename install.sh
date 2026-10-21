@@ -17,16 +17,20 @@ mpkg="${here}/mpkg/mpkg"
 
 [[ -x "${mpkg}" ]] || { echo "install.sh: ${mpkg} is missing or not executable" >&2; exit 1; }
 
-MPKG_COMMANDS="install remove rm uninstall upgrade up list ls available search avail
-info show deps tree order resolve link unlink relink prune adopt clean log env doctor
-check help version i"
+# Keep in step with the dispatch table at the bottom of mpkg/mpkg.
+MPKG_COMMANDS="install i remove rm uninstall upgrade up list ls available search avail
+info show deps tree order resolve link unlink relink prune adopt clean gc venv envs
+log env doctor check help version"
 
 # Find the first non-option word; if it is not a command, the caller named a
-# package and means 'install'.
+# package and means 'install'. The values of --prefix and -j are not words.
 first=""
+skip=0
 for word in "$@"; do
+    (( skip )) && { skip=0; continue; }
     case "${word}" in
-        -*) continue ;;
+        --prefix|-j|--jobs) skip=1 ;;
+        -*) ;;
         *)  first="${word}"; break ;;
     esac
 done

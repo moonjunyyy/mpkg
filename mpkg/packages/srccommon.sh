@@ -45,6 +45,10 @@ mpkg_fetch() {
 }
 
 mpkg_prepare() {
+    # Leftovers of an interrupted build of this version: start from empty.
+    if [[ -d "${MPKG_SOFT}/${MPKG_DEST_NAME}" ]] && ! mpkg::store_in_use "${MPKG_DEST_NAME}"; then
+        rm -rf "${MPKG_SOFT:?}/${MPKG_DEST_NAME}"
+    fi
     mkdir -p "${MPKG_SOFT}/${MPKG_DEST_NAME}" || return 1
     if [[ "${MPKG_INTREE}" -eq 1 ]]; then
         cd "${MPKG_SRC_DIR}" || return 1
@@ -87,7 +91,7 @@ mpkg_build() {
     local -a MPKG_RENDERED_VARS
     mpkg::render_make_vars
     mpkg::step "building with -j${_NPROCESSORS}"
-    mpkg::run make -j"${_NPROCESSORS}" "${MPKG_MAKE_TARGETS[@]}" "${MPKG_RENDERED_VARS[@]}" \
+    mpkg::run "${MPKG_MAKE:-make}" -j"${_NPROCESSORS}" "${MPKG_MAKE_TARGETS[@]}" "${MPKG_RENDERED_VARS[@]}" \
         || mpkg::stage_failed "${MPKG_NAME}: build failed"
 }
 
@@ -95,6 +99,6 @@ mpkg_install() {
     local -a MPKG_RENDERED_VARS
     mpkg::render_make_vars
     mpkg::step "installing into ${MPKG_SOFT}/${MPKG_DEST_NAME}"
-    mpkg::run make "${MPKG_RENDERED_VARS[@]}" "${MPKG_INSTALL_TARGETS[@]}" \
+    mpkg::run "${MPKG_MAKE:-make}" "${MPKG_RENDERED_VARS[@]}" "${MPKG_INSTALL_TARGETS[@]}" \
         || mpkg::stage_failed "${MPKG_NAME}: make ${MPKG_INSTALL_TARGETS[*]} failed"
 }

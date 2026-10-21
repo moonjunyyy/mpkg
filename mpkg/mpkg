@@ -117,12 +117,20 @@ MPKG_DRY_RUN=0 MPKG_FORCE=0 MPKG_NO_DEPS=0 MPKG_WITH_OPT=0
 MPKG_KEEP_GOING=0 MPKG_KEEP_WORK=0 MPKG_ASSUME_YES=0 MPKG_FORCE_ALL=0 MPKG_FIX=0 MPKG_ISOLATED=0
 MPKG_JOBS=""
 
+# An option that takes a value must have one: `shift 2` with a single word left
+# fails without shifting, and the loop below would spin forever.
+mpkg::optarg() {
+    [[ $# -ge 2 && -n "$2" ]] && return 0
+    echo "mpkg: option $1 needs a value" >&2
+    exit 2
+}
+
 declare -a ARGS=()
 while (( $# )); do
     case "$1" in
-        --prefix)       MPKG_PREFIX="$2"; shift 2 ;;
+        --prefix)       mpkg::optarg "$@"; MPKG_PREFIX="$2"; shift 2 ;;
         --prefix=*)     MPKG_PREFIX="${1#*=}"; shift ;;
-        -j|--jobs)      MPKG_JOBS="$2"; shift 2 ;;
+        -j|--jobs)      mpkg::optarg "$@"; MPKG_JOBS="$2"; shift 2 ;;
         -j*)            MPKG_JOBS="${1#-j}"; shift ;;
         -n|--dry-run)   MPKG_DRY_RUN=1; shift ;;
         -f|--force)     MPKG_FORCE=1; shift ;;
@@ -148,6 +156,9 @@ while (( $# )); do
                         fi ;;
     esac
 done
+
+[[ -z "${MPKG_JOBS}" || "${MPKG_JOBS}" =~ ^[1-9][0-9]*$ ]] \
+    || { echo "mpkg: -j wants a positive number, not '${MPKG_JOBS}'" >&2; exit 2; }
 
 mpkg::core_init
 
@@ -179,6 +190,8 @@ cmd_available() {
     local p mark title
     while IFS= read -r p; do
         mpkg::db_installed "${p}" && mark="*" || mark=" "
+        # Load in this shell; inside $(...) the cache would die with the subshell.
+        mpkg::meta_load "${p}" 2>/dev/null
         title="$(mpkg::meta "${p}" desc 2>/dev/null)"
         [[ -z "${title}" ]] && title="$(mpkg::meta "${p}" title 2>/dev/null)"
         printf '%s %-16s %s\n' "${mark}" "${p}" "${title}"
@@ -280,7 +293,14 @@ cmd_prune() { mpkg::prune_links; }
 # the database -- the state left behind by the original install.sh.
 cmd_adopt() {
     local dir base stem version pkg probe best
-    declare -A chosen=() chosen_ver=()
+    declare -A chosen=() chosen_ver=() by_probe=()
+
+    # Trees are named after the binary (nvim-0.12.5), packages after the
+    # project (neovim): index every package by its probe command, once.
+    while IFS= read -r probe; do
+        mpkg::meta_load "${probe}" 2>/dev/null || continue
+        [[ -n "${MPKG_META_PROBE[$probe]:-}" ]] && by_probe[${MPKG_META_PROBE[$probe]}]="${probe}"
+    done < <(mpkg::available)
 
     shopt -s nullglob
     for dir in "${MPKG_SOFT}"/*/; do
@@ -293,11 +313,7 @@ cmd_adopt() {
         if mpkg::exists "${stem}"; then
             pkg="${stem}"
         else
-            # Trees are named after the binary (nvim-0.12.5), packages after
-            # the project (neovim); match on the probe command.
-            while IFS= read -r probe; do
-                [[ "$(mpkg::meta "${probe}" probe 2>/dev/null)" == "${stem}" ]] && { pkg="${probe}"; break; }
-            done < <(mpkg::available)
+            pkg="${by_probe[${stem}]:-}"
         fi
         [[ -z "${pkg}" ]] && { mpkg::warn "no package matches ${base}; skipping"; continue; }
 
@@ -374,7 +390,8 @@ cmd_env() {
     else
         mpkg::warn "no env file yet — run 'mpkg install shell-config'"
         printf 'export PATH="%s/bin:$PATH"\n' "${MPKG_PREFIX}"
-        printf 'export LD_LIBRARY_PATH="%s/lib:%s/lib64:$LD_LIBRARY_PATH"\n' "${MPKG_PREFIX}" "${MPKG_PREFIX}"
+        [[ "${_OS}" == "macos" ]] \
+            || printf 'export LD_LIBRARY_PATH="%s/lib:%s/lib64:$LD_LIBRARY_PATH"\n' "${MPKG_PREFIX}" "${MPKG_PREFIX}"
     fi
 }
 
@@ -385,7 +402,7 @@ cmd_doctor() {
 
     mpkg::head "build tools"
     local t
-    for t in cc make tar; do
+    for t in cc "${MPKG_MAKE}" tar; do
         if command -v "${t}" >/dev/null 2>&1; then mpkg::ok "${t}"
         else mpkg::err "${t} is missing"; problems=$(( problems + 1 )); fi
     done
@@ -481,6 +498,16 @@ cmd_doctor() {
         return 1
     fi
 }
+
+# Commands that change the prefix hold its lock; queries and dry runs do not.
+case "${CMD}" in
+    install|i|remove|rm|uninstall|upgrade|up|link|unlink|relink|prune|adopt|clean|gc)
+        (( MPKG_DRY_RUN )) || mpkg::lock ;;
+    venv|envs)
+        [[ "${ARGS[0]:-list}" =~ ^(list|ls|activate|run|exec)$ ]] || mpkg::lock ;;
+    doctor|check)
+        (( MPKG_FIX )) && mpkg::lock ;;
+esac
 
 case "${CMD}" in
     install|i)          cmd_install ;;

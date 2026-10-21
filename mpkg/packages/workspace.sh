@@ -19,7 +19,6 @@ MPKG_DEPENDS=(
     nvim-config
     mason
     zathura-pdf-poppler
-    oh-my-zsh
     starship
-    shell-config
+    shell-config            # pulls in oh-my-zsh where zsh exists
 )

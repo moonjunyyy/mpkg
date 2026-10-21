@@ -58,10 +58,31 @@ mpkg::github_latest_tag() {
 # Versions
 # ---------------------------------------------------------------------------
 
+# vsort [-r] [-u] — version-sort stdin. `sort -V` is GNU/FreeBSD/macOS only;
+# elsewhere (OpenBSD, busybox builds without it) every run of digits is
+# zero-padded into a sort key, which orders dotted versions the same way.
+mpkg::vsort() {
+    if [[ -z "${_MPKG_SORT_V:-}" ]]; then
+        printf '1\n' | sort -V >/dev/null 2>&1 && _MPKG_SORT_V=1 || _MPKG_SORT_V=0
+    fi
+    if (( _MPKG_SORT_V )); then
+        sort -V "$@"
+        return
+    fi
+    awk '{ k = ""; s = $0
+           while (match(s, /[0-9]+/)) {
+               k = k substr(s, 1, RSTART - 1) sprintf("%020s", substr(s, RSTART, RLENGTH))
+               s = substr(s, RSTART + RLENGTH)
+           }
+           gsub(/ /, "0", k)
+           print k s "\t" $0 }' \
+        | LC_ALL=C sort "$@" | cut -f2-
+}
+
 # All matches of <pattern> in <file>, newest first, deduplicated.
 mpkg::match_versions() {
     local pattern="$1" file="$2"
-    grep -oE "${pattern}" "${file}" | sort -Vru
+    grep -oE "${pattern}" "${file}" | mpkg::vsort -r -u
 }
 
 # Single newest match. Kept for package scripts that only need one.
@@ -79,7 +100,7 @@ mpkg::vercmp() {
     local a="$1" b="$2"
     [[ "$a" == "$b" ]] && { echo 0; return; }
     local newest
-    newest=$(printf '%s\n%s\n' "$a" "$b" | sort -Vr | head -n1)
+    newest=$(printf '%s\n%s\n' "$a" "$b" | mpkg::vsort -r | head -n1)
     [[ "${newest}" == "$a" ]] && echo 1 || echo -1
 }
 
@@ -87,7 +108,8 @@ mpkg::vercmp() {
 mpkg::probe_version() {
     local cmd="$1" out
     command -v "${cmd}" >/dev/null 2>&1 || { echo "0.0.0"; return; }
-    out=$( { "${cmd}" --version 2>/dev/null || "${cmd}" -v 2>/dev/null || true; } \
+    # </dev/null: a tool that ignores --version must not sit reading the tty.
+    out=$( { "${cmd}" --version </dev/null 2>/dev/null || "${cmd}" -v </dev/null 2>/dev/null || true; } \
            | tr '[:upper:]' '[:lower:]' | head -n5 )
     if [[ "${out}" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then echo "${BASH_REMATCH[1]}"
     elif [[ "${out}" =~ ([0-9]+\.[0-9]+) ]];        then echo "${BASH_REMATCH[1]}"
@@ -123,9 +145,37 @@ mpkg::have_shared_lib() {
     return 1
 }
 
+# What a copy of the repository must never carry, and a digest of it never
+# count: macOS AppleDouble companions (._name, which macOS writes next to every
+# file with extended attributes on NFS/SMB/exFAT volumes -- a ._ui.lua in
+# lua/plugins/ is a Lua file lazy.nvim tries to load), Finder metadata, editor
+# swap files and agent state.
+mpkg::is_junk() {
+    case "/$1" in
+        */._*|*/.DS_Store|*.swp|*/.claude|*/.claude/*) return 0 ;;
+    esac
+    return 1
+}
+
+# copy_clean <src> <dst> — copy a file or a directory tree, leaving junk out.
+mpkg::copy_clean() {
+    local src="$1" dst="$2"
+    if [[ -d "${src}" ]]; then
+        mkdir -p "${dst}" || return 1
+        # COPYFILE_DISABLE: macOS tar would otherwise archive xattrs as ._ files.
+        COPYFILE_DISABLE=1 tar -C "${src}" --exclude='._*' --exclude=.DS_Store \
+            --exclude='*.swp' --exclude=.claude -cf - . \
+            | tar -C "${dst}" -xf -
+    else
+        mpkg::is_junk "${src}" && return 0
+        mkdir -p "$(dirname "${dst}")" && cp "${src}" "${dst}"
+    fi
+}
+
 # tree_digest <dir> — a short content hash of the regular files under <dir>,
 # names included, so it changes whenever a file is added, removed, renamed or
-# edited. MPKG_DIGEST_SKIP lists paths, relative to <dir>, to leave out.
+# edited; junk (mpkg::is_junk) does not count. MPKG_DIGEST_SKIP lists paths,
+# relative to <dir>, to leave out.
 mpkg::tree_digest() {
     local dir="$1"
     local sum=(cksum)
@@ -137,6 +187,7 @@ mpkg::tree_digest() {
         find . -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
             f="${f#./}"
             [[ " ${MPKG_DIGEST_SKIP:-} " == *" ${f} "* ]] && continue
+            mpkg::is_junk "${f}" && continue
             printf '%s\n' "${f}"; cat "${f}"
         done
     ) | "${sum[@]}" | cut -c1-10

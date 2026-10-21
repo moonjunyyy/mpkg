@@ -224,7 +224,32 @@ at the system CA bundle, and `curl` is configured with an explicit
 ## Environment
 
 `MPKG_PREFIX` (default `$HOME/.local`), `MPKG_WORK`, `MPKG_JOBS`,
-`MPKG_GNU_MIRROR`, `SSL_CERT_FILE`, `MPKG_OS`, `MPKG_ARCH`.
+`MPKG_GNU_MIRROR`, `SSL_CERT_FILE`, `MPKG_OS`, `MPKG_ARCH`, `MPKG_MAKE`
+(GNU make; `gmake` is picked up on the BSDs), `MPKG_GIT_RUST` (`yes`/`no`;
+by default git's Rust parts are built only when a working `cargo` exists,
+otherwise git is built with `NO_RUST`).
+
+Commands that change the prefix take a lock, `$MPKG_PREFIX/var/mpkg/lock`, so
+two mpkg runs cannot interleave. A lock left by a crashed run on the same host
+is taken over; one held from another host (a shared NFS home) is reported
+with the command that clears it. A build that fails has its half-installed
+tree removed from `soft/` (kept with `--keep-work`).
+
+## Shell setup
+
+`mpkg install shell-config` writes two files and sources them from each
+shell's startup files through a `# >>> mpkg >>>` block; nothing else in those
+files is touched, and `mpkg remove shell-config` takes the blocks out again.
+
+| file | contents | sourced from |
+| --- | --- | --- |
+| `share/mpkg/env.sh` | environment variables only (POSIX sh, re-sourcing is harmless) | `~/.profile`, `~/.bash_profile` (only if it exists), `~/.bashrc`, `~/.zprofile`, `~/.zshrc` |
+| `share/mpkg/interactive.sh` | `mpkg_activate`, Oh My Zsh, starship, nvm, RVM | `~/.bashrc`, `~/.zshrc` |
+
+bash and zsh files are only written when that shell is installed, and Oh My
+Zsh is only a dependency where zsh exists. `env.sh` moves the prefix to the
+front of `PATH` rather than only adding it, so macOS's `path_helper` cannot
+push it behind `/usr/bin`. `mpkg env` prints `env.sh`.
 
 mpkg needs bash 4 or newer. On macOS, where `/bin/bash` is 3.2, it re-runs
 itself under Homebrew's or MacPorts' bash when one is installed. State lives in

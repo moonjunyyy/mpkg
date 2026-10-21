@@ -22,7 +22,7 @@ mpkg_discover() {
     mpkg::download "${base}/cache.json" "${cache}" || return 1
 
     MPKG_VERSION="$(jq -r --arg p "${project}" '.[2][$p][]' "${cache}" \
-        | grep -E "^${MPKG_GNOME_MAJOR}\.[0-9]*[02468]\.[0-9]+$" | sort -Vr | head -n1)"
+        | grep -E "^${MPKG_GNOME_MAJOR}\.[0-9]*[02468]\.[0-9]+$" | mpkg::vsort -r | head -n1)"
     [[ -n "${MPKG_VERSION}" ]] || { mpkg::err "${MPKG_NAME}: no stable release in ${base}/cache.json"; return 1; }
 
     path="$(jq -r --arg p "${project}" --arg v "${MPKG_VERSION}" \

@@ -135,7 +135,7 @@ mpkg::store_versions() {
       while IFS= read -r e; do
           v="$(mpkg::venv_get "${e}" "${pkg}" version)" && printf '%s\n' "${v}"
       done < <(mpkg::venv_names)
-    } | sort -Vu | tr '\n' ' '
+    } | mpkg::vsort -u | tr '\n' ' '
 }
 
 # --- linking ----------------------------------------------------------------
@@ -225,8 +225,10 @@ _mpkg_strip() {
     eval "export $1=\"\${_mpkg_s}\""
 }
 
-# Put a directory in front of a colon-separated variable.
+# Put a directory in front of a colon-separated variable -- only one the
+# environment has: a variable is not touched for what is not installed.
 _mpkg_front() {
+    [ -d "$2" ] || return 0
     _mpkg_strip "$1" "$2"
     eval "_mpkg_s=\${$1-}"
     if [ -n "${_mpkg_s}" ]; then eval "export $1=\"\$2:\${_mpkg_s}\""
@@ -246,15 +248,20 @@ if [ "${_mpkg_env_isolated}" = 1 ]; then
 fi
 
 _mpkg_front PATH            "${_mpkg_env_dir}/bin"
-_mpkg_front LD_LIBRARY_PATH "${_mpkg_env_dir}/lib64"
-_mpkg_front LD_LIBRARY_PATH "${_mpkg_env_dir}/lib"
+# dyld ignores LD_LIBRARY_PATH; macOS binaries find libraries by rpath.
+if [ "$(uname -s)" != Darwin ]; then
+    _mpkg_front LD_LIBRARY_PATH "${_mpkg_env_dir}/lib64"
+    _mpkg_front LD_LIBRARY_PATH "${_mpkg_env_dir}/lib"
+fi
 _mpkg_front LIBRARY_PATH    "${_mpkg_env_dir}/lib64"
 _mpkg_front LIBRARY_PATH    "${_mpkg_env_dir}/lib"
 _mpkg_front CPATH           "${_mpkg_env_dir}/include"
 _mpkg_front PKG_CONFIG_PATH "${_mpkg_env_dir}/lib64/pkgconfig"
 _mpkg_front PKG_CONFIG_PATH "${_mpkg_env_dir}/lib/pkgconfig"
 # A trailing ':' keeps man's built-in search path after ours.
-MANPATH="${_mpkg_env_dir}/share/man:${MANPATH-}"; export MANPATH
+if [ -d "${_mpkg_env_dir}/share/man" ]; then
+    MANPATH="${_mpkg_env_dir}/share/man:${MANPATH-}"; export MANPATH
+fi
 
 export MPKG_VENV="${_mpkg_env_name}" MPKG_VENV_DIR="${_mpkg_env_dir}"
 if [ -z "${MPKG_VENV_NO_PROMPT:-}" ] && [ -n "${PS1-}" ]; then

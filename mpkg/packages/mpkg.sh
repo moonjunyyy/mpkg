@@ -54,7 +54,7 @@ mpkg_discover() {
     rm -rf "${stage}" && mkdir -p "${stage}/mpkg" || return 1
     for f in "${MPKG_SELF_FILES[@]}"; do
         [[ -e "${MPKG_SELF_SRC}/${f}" ]] || { mpkg::err "missing ${MPKG_SELF_SRC}/${f}"; return 1; }
-        cp -R "${MPKG_SELF_SRC}/${f}" "${stage}/${f}" || return 1
+        mpkg::copy_clean "${MPKG_SELF_SRC}/${f}" "${stage}/${f}" || return 1
     done
     local ver
     ver="$(sed -n 's/^MPKG_VERSION_STR="\(.*\)"$/\1/p' "${MPKG_SELF_SRC}/mpkg/mpkg")"

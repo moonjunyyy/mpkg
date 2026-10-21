@@ -8,6 +8,19 @@ mpkg::work_enter() {
     cd "${MPKG_WORK}" || return 1
 }
 
+# A failed build can leave a half-installed tree in the store, which a later
+# build of the same version would install on top of. Delete it -- unless it is
+# a tree the database or an environment points at (a forced reinstall of the
+# current version), or --keep-work asked for the evidence to stay.
+mpkg::discard_partial_tree() {
+    local d="${MPKG_DEST_NAME:-}"
+    [[ -n "${d}" && "${d}" != */* && -d "${MPKG_SOFT}/${d}" ]] || return 0
+    [[ ${MPKG_KEEP_WORK:-0} -eq 1 ]] && return 0
+    mpkg::store_in_use "${d}" && return 0
+    rm -rf "${MPKG_SOFT:?}/${d}"
+    mpkg::step "removed the incomplete ${d} from the store"
+}
+
 mpkg::install_one() {
     local name="$1" dest kind
 
@@ -38,7 +51,8 @@ mpkg::install_one() {
 
     MPKG_STATUS=""
     if ! mpkg_run; then
-        mpkg::err "${name}: installation failed"
+        mpkg::discard_partial_tree
+        mpkg::err "${name}: installation failed (log: mpkg log ${name})"
         return 1
     fi
 

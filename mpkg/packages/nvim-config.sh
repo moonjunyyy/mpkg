@@ -68,7 +68,7 @@ mpkg::nvim_write_config() {
 
     mpkg::step "installing ${MPKG_NVIM_DIR} from the repository"
     mkdir -p "$(dirname "${MPKG_NVIM_DIR}")" || return 1
-    cp -R "${MPKG_NVIM_SRC}" "${MPKG_NVIM_DIR}" || return 1
+    mpkg::copy_clean "${MPKG_NVIM_SRC}" "${MPKG_NVIM_DIR}" || return 1
     MPKG_DIGEST_SKIP="${MPKG_NVIM_SKIP}" mpkg::tree_digest "${MPKG_NVIM_DIR}" \
         > "${MPKG_NVIM_DIR}/${MPKG_NVIM_STAMP}"
 
