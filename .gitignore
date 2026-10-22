@@ -1,4 +1,7 @@
+/.luarocks
 /luarocks
 /lua
 /lua_modules
-/.luarocks
+.claude/
+._*
+workdir/
