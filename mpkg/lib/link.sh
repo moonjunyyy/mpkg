@@ -18,11 +18,14 @@
 # The walk below takes regular files *and* symlinks.
 
 # Emit every linkable path inside a package tree, relative to the tree root.
+# A tree's top-level .mpkg/ is private: it holds what the package's links
+# point into but must not itself appear in the prefix (Go's GOROOT, thousands
+# of files nothing outside the go command reads).
 mpkg::link_entries() {
     local root="$1"
     [[ -d "${root}" ]] || return 1
-    find "${root}" -mindepth 1 \( -type f -o -type l \) -printf '%P\0' 2>/dev/null \
-        || find "${root}" -mindepth 1 \( -type f -o -type l \) -print0 \
+    find "${root}" -mindepth 1 -path "${root}/.mpkg" -prune -o \( -type f -o -type l \) -printf '%P\0' 2>/dev/null \
+        || find "${root}" -mindepth 1 -path "${root}/.mpkg" -prune -o \( -type f -o -type l \) -print0 \
            | while IFS= read -r -d '' p; do printf '%s\0' "${p#"${root}"/}"; done
 }
 
@@ -103,16 +106,30 @@ mpkg::unlink() {
 link_package()   { mpkg::link "${MPKG_NAME}" "$1"; }
 unlink_package() { mpkg::unlink "${MPKG_NAME}"; }
 
+# Every symlink in the prefix except those inside the store and mpkg's own
+# state, as NUL-separated <path> <target> pairs. One find for the lot: a
+# prefix holds tens of thousands of links, too many for one readlink each.
+mpkg::prefix_links() {
+    local p="${MPKG_PREFIX}"
+    if find "${p}" -maxdepth 0 -printf '' 2>/dev/null; then
+        find "${p}" -mindepth 1 \( -path "${MPKG_SOFT}" -o -path "${MPKG_STATE}" \) -prune \
+            -o -type l -printf '%p\0%l\0' 2>/dev/null
+    else
+        # BSD find has no -printf.
+        local t
+        find "${p}" -mindepth 1 \( -path "${MPKG_SOFT}" -o -path "${MPKG_STATE}" \) -prune \
+            -o -type l -print0 2>/dev/null \
+            | while IFS= read -r -d '' t; do printf '%s\0%s\0' "${t}" "$(readlink "${t}")"; done
+    fi
+}
+
 # Drop links that point at a package tree that no longer exists.
 mpkg::prune_links() {
-    local d n=0 t
-    for d in bin lib lib64 include share libexec; do
-        [[ -d "${MPKG_PREFIX}/${d}" ]] || continue
-        while IFS= read -r -d '' t; do
-            if [[ "$(readlink "${t}")" == "${MPKG_SOFT}/"* ]] && [[ ! -e "${t}" ]]; then
-                rm -f "${t}"; n=$(( n + 1 ))
-            fi
-        done < <(find "${MPKG_PREFIX}/${d}" -type l -print0 2>/dev/null)
-    done
+    local t target n=0
+    while IFS= read -r -d '' t && IFS= read -r -d '' target; do
+        if [[ "${target}" == "${MPKG_SOFT}/"* && ! -e "${t}" ]]; then
+            rm -f "${t}"; n=$(( n + 1 ))
+        fi
+    done < <(mpkg::prefix_links)
     mpkg::say "pruned ${n} dangling link(s)"
 }

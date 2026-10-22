@@ -30,11 +30,30 @@ MPKG_CONFIGURE_FLAGS=(
 # are compiled into ${datadir}/glib-2.0/schemas/gschemas.compiled on
 # XDG_DATA_DIRS (shell-config adds ${MPKG_PREFIX}/share). A GTK program without
 # them aborts the first time it opens a file chooser.
+#
+# That file is compiled from every schema in the prefix, so it belongs to the
+# prefix, not to this tree. Meson compiles one into the tree too; linked, it
+# would be overwritten by the prefix's own on post-install, and a later
+# relink --force would put the tree's GTK-only copy back over it.
+MPKG_GTK_SCHEMAS_CACHE="share/glib-2.0/schemas/gschemas.compiled"
+
+mpkg_install() {
+    mpkg_super install || return 1
+    rm -f "${MPKG_SOFT}/${MPKG_DEST_NAME}/${MPKG_GTK_SCHEMAS_CACHE}"
+}
+
 mpkg_post_install() {
-    local dir="${MPKG_PREFIX}/share/glib-2.0/schemas"
+    local dir="${MPKG_PREFIX}/share/glib-2.0/schemas" files
+    # Installs from before the tree's copy was dropped still list it.
+    files="$(mpkg::db_files "${MPKG_NAME}")"
+    if [[ -f "${files}" ]] && grep -qxF "${MPKG_GTK_SCHEMAS_CACHE}" "${files}"; then
+        grep -vxF "${MPKG_GTK_SCHEMAS_CACHE}" "${files}" > "${files}.tmp" && mv -f "${files}.tmp" "${files}"
+    fi
     [[ -d "${dir}" ]] || return 0
     command -v glib-compile-schemas >/dev/null 2>&1 \
         || { mpkg::warn "glib-compile-schemas not found; GSettings schemas left uncompiled"; return 0; }
+    # A link left over from such an install: compile a real file, not through it.
+    [[ -L "${dir}/gschemas.compiled" ]] && rm -f "${dir}/gschemas.compiled"
     mpkg::step "compiling GSettings schemas in ${dir}"
     mpkg::run glib-compile-schemas "${dir}" || mpkg::warn "glib-compile-schemas failed"
     return 0

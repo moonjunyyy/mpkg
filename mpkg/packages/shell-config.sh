@@ -102,6 +102,10 @@ mpkg_build_prepend() {
 }
 
 mpkg_path_prepend PATH            "${HOME}/.cargo/bin"
+# What `go install` builds (mpkg install go): $GOBIN, else the first $GOPATH's bin.
+_mpkg_gopath="${GOPATH:-${HOME}/go}"
+mpkg_path_prepend PATH            "${GOBIN:-${_mpkg_gopath%%:*}/bin}"
+unset _mpkg_gopath
 mpkg_path_prepend PATH            "${MPKG_PREFIX}/bin"
 mpkg_build_prepend CPATH           "${MPKG_PREFIX}/include"
 mpkg_build_prepend LIBRARY_PATH    "${MPKG_PREFIX}/lib64"
@@ -196,6 +200,36 @@ fi
 
 # RVM (last: it wants its own PATH entries first)
 [ -s "${HOME}/.rvm/scripts/rvm" ] && . "${HOME}/.rvm/scripts/rvm"
+
+# Upgrade notice. No network here: this reads what the last `mpkg update`
+# found, and when that check is older than MPKG_UPDATE_INTERVAL minutes
+# (default a day) starts a new one in the background for the next shell.
+# MPKG_NO_UPDATE_CHECK=1 turns both off.
+_mpkg_update_notice() {
+    [ -z "${MPKG_NO_UPDATE_CHECK:-}" ] || return 0
+    command -v mpkg >/dev/null 2>&1 || return 0
+    _mpkg_st="${MPKG_PREFIX}/var/mpkg"
+    if [ ! -f "${_mpkg_st}/updates.checked" ] \
+       || [ -n "$(find "${_mpkg_st}/updates.checked" -mmin +"${MPKG_UPDATE_INTERVAL:-1440}" 2>/dev/null)" ]; then
+        (nohup mpkg update --auto </dev/null >/dev/null 2>&1 &)
+    fi
+    [ -s "${_mpkg_st}/updates" ] || return 0
+    # A line counts while the package is still at the version it was checked at.
+    _mpkg_up=""
+    _mpkg_n=0
+    while read -r _mpkg_p _mpkg_have _mpkg_new; do
+        [ -n "${_mpkg_new}" ] || continue
+        [ "$(sed -n 's/^version=//p' "${_mpkg_st}/db/${_mpkg_p}" 2>/dev/null)" = "${_mpkg_have}" ] || continue
+        _mpkg_up="${_mpkg_up} ${_mpkg_p}"
+        _mpkg_n=$((_mpkg_n + 1))
+    done < "${_mpkg_st}/updates"
+    [ "${_mpkg_n}" -gt 0 ] \
+        && printf 'mpkg: %s upgrade(s) available:%s  (mpkg upgrade)\n' "${_mpkg_n}" "${_mpkg_up}"
+    return 0
+}
+_mpkg_update_notice
+unset -f _mpkg_update_notice
+unset _mpkg_st _mpkg_up _mpkg_n _mpkg_p _mpkg_have _mpkg_new
 BODY
     } > "${MPKG_RC_FILE}"
 }

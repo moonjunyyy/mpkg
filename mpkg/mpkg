@@ -43,7 +43,7 @@ export MPKG_ROOT MPKG_HOME MPKG_PACKAGES
 
 MPKG_VERSION_STR="0.2.0"
 
-for _m in core util class db link registry depsolve engine venv; do
+for _m in core util class db link registry depsolve engine venv doctor update; do
     # shellcheck source=/dev/null
     . "${MPKG_LIB}/${_m}.sh" || { echo "mpkg: cannot load lib/${_m}.sh" >&2; exit 1; }
 done
@@ -63,6 +63,7 @@ commands:
   install <pkg>...     resolve dependencies and install
   remove <pkg>...      unlink and delete an installed package
   upgrade [pkg]...     reinstall packages whose upstream version moved on
+  update [pkg]...      check upstream for newer versions; installs nothing
   list                 installed packages
   available            packages this checkout can build
   info <pkg>           metadata, dependencies and install state
@@ -101,6 +102,7 @@ options:
   -k, --keep-going     carry on after a package fails
       --keep-work      leave the work directory behind for debugging
       --fix            with 'doctor': repair what can be repaired
+      --auto           with 'update': quietly, and only if the last check is stale
       --isolated       with 'venv create': hide the base prefix when active
   -v, --verbose        stream build output
   -q, --quiet          only errors
@@ -115,6 +117,7 @@ USAGE
 
 MPKG_DRY_RUN=0 MPKG_FORCE=0 MPKG_NO_DEPS=0 MPKG_WITH_OPT=0
 MPKG_KEEP_GOING=0 MPKG_KEEP_WORK=0 MPKG_ASSUME_YES=0 MPKG_FORCE_ALL=0 MPKG_FIX=0 MPKG_ISOLATED=0
+MPKG_AUTO=0
 MPKG_JOBS=""
 
 # An option that takes a value must have one: `shift 2` with a single word left
@@ -137,6 +140,7 @@ while (( $# )); do
         --force-all)    MPKG_FORCE=1; MPKG_FORCE_ALL=1; shift ;;
         --fix)          MPKG_FIX=1; shift ;;
         --isolated)     MPKG_ISOLATED=1; shift ;;
+        --auto)         MPKG_AUTO=1; MPKG_QUIET=1; shift ;;
         --no-deps)      MPKG_NO_DEPS=1; shift ;;
         --with-optional) MPKG_WITH_OPT=1; shift ;;
         -k|--keep-going) MPKG_KEEP_GOING=1; shift ;;
@@ -174,15 +178,19 @@ mpkg::need_args() {
 # ---------------------------------------------------------------------------
 
 cmd_list() {
-    local p v k
+    local p v k have avail
     local n=0
+    declare -A newer=()
+    while read -r p have avail; do newer[$p]="${avail}"; done < <(mpkg::updates_pending)
     while IFS= read -r p; do
         v="$(mpkg::db_get "${p}" version)"
         k="$(mpkg::db_get "${p}" kind)"
-        printf '%-16s %-14s %s\n' "${p}" "${v}" "${k}"
+        printf '%-16s %-14s %-10s%s\n' "${p}" "${v}" "${k}" \
+            "${newer[$p]:+  ${C_YEL}-> ${newer[$p]}${C_RST}}"
         n=$(( n + 1 ))
     done < <(mpkg::db_list)
     (( n == 0 )) && mpkg::say "no packages installed under ${MPKG_PREFIX}"
+    (( ${#newer[@]} )) && mpkg::say "${#newer[@]} upgrade(s) available (mpkg upgrade); checked by 'mpkg update'"
     return 0
 }
 
@@ -255,6 +263,8 @@ cmd_remove() {
 }
 
 cmd_upgrade() { mpkg::upgrade "${ARGS[@]}"; }
+
+cmd_update() { mpkg::update_check "${MPKG_AUTO}" "${ARGS[@]}"; }
 
 cmd_link() {
     mpkg::need_args
@@ -395,109 +405,7 @@ cmd_env() {
     fi
 }
 
-cmd_doctor() {
-    local problems=0 fix="${MPKG_FIX}"
-    mpkg::head "prefix"
-    mpkg::say "  ${MPKG_PREFIX}   (os=${_OS} arch=${_ARCH} jobs=${_NPROCESSORS})"
-
-    mpkg::head "build tools"
-    local t
-    for t in cc "${MPKG_MAKE}" tar; do
-        if command -v "${t}" >/dev/null 2>&1; then mpkg::ok "${t}"
-        else mpkg::err "${t} is missing"; problems=$(( problems + 1 )); fi
-    done
-
-    mpkg::head "trust store"
-    if [[ -n "${MPKG_CA_BUNDLE}" ]]; then
-        mpkg::ok "CA bundle: ${MPKG_CA_BUNDLE}"
-    else
-        mpkg::err "no CA bundle found; every https download will fail verification"
-        problems=$(( problems + 1 ))
-    fi
-    if [[ -e "${MPKG_PREFIX}/ssl/cert.pem" ]]; then
-        mpkg::ok "openssl default CAfile is present"
-    elif mpkg::db_installed openssl; then
-        if [[ ${fix} -eq 1 && -n "${MPKG_CA_BUNDLE}" ]]; then
-            mkdir -p "${MPKG_PREFIX}/ssl/certs"
-            ln -sf "${MPKG_CA_BUNDLE}" "${MPKG_PREFIX}/ssl/cert.pem"
-            mpkg::ok "repaired: ${MPKG_PREFIX}/ssl/cert.pem -> ${MPKG_CA_BUNDLE}"
-        else
-            mpkg::err "${MPKG_PREFIX}/ssl/cert.pem is missing (run: mpkg doctor --fix)"
-            problems=$(( problems + 1 ))
-        fi
-    fi
-
-    mpkg::head "shared libraries"
-    local l
-    for l in curl ssl crypto; do
-        if mpkg::have_shared_lib "${l}"; then
-            mpkg::ok "lib${l}.so is linkable"
-        elif mpkg::db_installed curl || mpkg::db_installed openssl; then
-            if [[ ${fix} -eq 1 ]]; then
-                mpkg::warn "lib${l}.so missing; relinking"
-                cmd_relink >/dev/null
-                mpkg::have_shared_lib "${l}" && mpkg::ok "repaired lib${l}.so" \
-                    || { mpkg::err "lib${l}.so still missing"; problems=$(( problems + 1 )); }
-            else
-                mpkg::err "lib${l}.so is missing from the prefix (run: mpkg doctor --fix)"
-                problems=$(( problems + 1 ))
-            fi
-        fi
-    done
-
-    mpkg::head "git https support"
-    local g="${MPKG_PREFIX}/bin/git"
-    if [[ -x "${g}" ]]; then
-        if [[ -e "$("${g}" --exec-path)/git-remote-https" ]]; then
-            mpkg::ok "git-remote-https is present"
-        else
-            mpkg::err "this git cannot speak https (no git-remote-https)"
-            mpkg::err "fix: mpkg relink && mpkg install --force git"
-            problems=$(( problems + 1 ))
-        fi
-    else
-        mpkg::say "  no git installed in the prefix"
-    fi
-
-    mpkg::head "database"
-    local p dest broken=0
-    while IFS= read -r p; do
-        dest="$(mpkg::db_dest "${p}")"
-        [[ -z "${dest}" ]] && continue
-        if [[ ! -d "${MPKG_SOFT}/${dest}" ]]; then
-            mpkg::err "${p}: recorded tree ${dest} is gone"
-            broken=$(( broken + 1 ))
-        fi
-    done < <(mpkg::db_list)
-    (( broken == 0 )) && mpkg::ok "all recorded package trees exist"
-    problems=$(( problems + broken ))
-
-    local e ne=0
-    broken=0
-    while IFS= read -r e; do
-        ne=$(( ne + 1 ))
-        while IFS= read -r p; do
-            dest="$(mpkg::venv_get "${e}" "${p}" dest)"
-            if [[ ! -d "${MPKG_SOFT}/${dest}" ]]; then
-                mpkg::err "environment ${e}: ${p} tree ${dest} is gone (mpkg venv update ${e} ${p})"
-                broken=$(( broken + 1 ))
-            fi
-        done < <(mpkg::venv_pkgs "${e}")
-    done < <(mpkg::venv_names)
-    if (( ne > 0 )); then
-        mpkg::head "environments"
-        (( broken == 0 )) && mpkg::ok "${ne} environment(s), every pinned tree present"
-    fi
-    problems=$(( problems + broken ))
-
-    mpkg::say ""
-    if (( problems == 0 )); then
-        mpkg::say "${C_GRN}No problems found.${C_RST}"
-    else
-        mpkg::say "${C_RED}${problems} problem(s) found.${C_RST}"
-        return 1
-    fi
-}
+cmd_doctor() { mpkg::doctor; }
 
 # Commands that change the prefix hold its lock; queries and dry runs do not.
 case "${CMD}" in
@@ -513,6 +421,7 @@ case "${CMD}" in
     install|i)          cmd_install ;;
     remove|rm|uninstall) cmd_remove ;;
     upgrade|up)         cmd_upgrade ;;
+    update|outdated)    cmd_update ;;
     list|ls)            cmd_list ;;
     available|search|avail) cmd_available ;;
     info|show)          cmd_info ;;

@@ -18,7 +18,7 @@ mpkg="${here}/mpkg/mpkg"
 [[ -x "${mpkg}" ]] || { echo "install.sh: ${mpkg} is missing or not executable" >&2; exit 1; }
 
 # Keep in step with the dispatch table at the bottom of mpkg/mpkg.
-MPKG_COMMANDS="install i remove rm uninstall upgrade up list ls available search avail
+MPKG_COMMANDS="install i remove rm uninstall upgrade up update outdated list ls available search avail
 info show deps tree order resolve link unlink relink prune adopt clean gc venv envs
 log env doctor check help version"
 

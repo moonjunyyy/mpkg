@@ -9,6 +9,7 @@ manager worth using.
 ./install.sh                    # bootstrap the whole workspace
 ./install.sh mpkg               # just mpkg itself, as ~/.local/bin/mpkg
 mpkg install git                # one package, dependencies first
+mpkg update                     # what has a newer release upstream?
 mpkg doctor --fix               # check the prefix, repair what is repairable
 ```
 
@@ -34,6 +35,8 @@ mpkg/
     link.sh           symlinking a package tree into the prefix
     engine.sh         install / remove orchestration
     venv.sh           environments: extra symlink views of the store
+    doctor.sh         checking the prefix and its links, and repairing them
+    update.sh         checking upstream for newer releases
   packages/
     *common.sh        base classes
     <name>.sh         one file per package
@@ -50,19 +53,74 @@ a package is exact: the link manifest says which paths it owns.
 | `install <pkg>...` | resolve dependencies and install, in order |
 | `remove <pkg>...` | unlink and delete; refuses if something still needs it |
 | `upgrade [pkg]...` | rebuild anything whose upstream version moved on |
+| `update [pkg]...` | check upstream for newer versions; installs nothing (see below) |
 | `list` / `available` | installed / installable |
 | `info <pkg>` | metadata, dependencies, install state |
 | `deps <pkg>` / `order <pkg>...` | dependency tree / resolved install order |
 | `link`, `unlink`, `relink`, `prune` | repair the symlink farm |
 | `adopt` | register trees already in `soft/` that predate the database |
-| `doctor [--fix]` | check the prefix for known breakages |
+| `doctor [--fix]` | check the prefix and every link in it (see below) |
 | `venv <sub> ...` | environments: create, add, rm, update, list, delete, activate, run |
 | `gc` | delete store trees that nothing uses |
 | `env` | the shell snippet this prefix needs |
 | `log <pkg>` | the last build log |
 
-Useful flags: `--prefix DIR`, `-j N`, `-n/--dry-run`, `-f/--force`,
+Useful flags: `--prefix DIR`, `-j N`, `-n/--dry-run`, `-f/--force`, `--fix`, `--auto`,
 `--force-all`, `--no-deps`, `-k/--keep-going`, `-v/--verbose`, `--keep-work`.
+
+## Updates and upgrade notices
+
+`mpkg update` asks upstream what each installed package's newest release is
+-- the discover stage `upgrade` starts with, and nothing after it -- and lists
+what is behind:
+
+```
+$ mpkg update
+==> checking 19 package(s) for newer releases
+  openssl              4.0.2            -> 4.0.3
+  ruby                 4.0.7            -> 4.0.8
+2 upgrade(s) available. Install with: mpkg upgrade [pkg...]
+  not checked, updated by their own installers: nodejs oh-my-zsh rust starship uv
+```
+
+The result is cached in `var/mpkg/updates`; `mpkg list` marks those packages.
+Packages run by their own installers (rustup, nvm, uv, starship, Oh My Zsh)
+are not checked, and neither are config and meta packages. For `mpkg` itself
+a "newer version" means the checkout has changed since it was installed.
+
+With `shell-config` installed, every interactive bash/zsh says so at start:
+
+```
+mpkg: 2 upgrade(s) available: openssl ruby  (mpkg upgrade)
+```
+
+That reads the cache only, so starting a shell never waits on the network.
+When the last check is older than `MPKG_UPDATE_INTERVAL` minutes (default
+1440, a day) the shell also starts `mpkg update --auto` in the background,
+and the next shell has the answer. `--auto` is silent and does nothing if a
+check is recent or already running. `MPKG_NO_UPDATE_CHECK=1` turns off both
+the notice and the background check.
+
+## Doctor
+
+`mpkg doctor` checks the build tools, the database, every link, the trust
+store, the shared libraries curl and openssl provide, and git's https helper.
+The link check compares each package's manifest with what is really in the
+prefix (and in each environment):
+
+| finding | meaning | `--fix` does |
+| --- | --- | --- |
+| missing | the link is gone | relinks the package |
+| pointing elsewhere | a link is there, to the wrong place | relinks the package |
+| replaced by files | a real file sits where the link was | nothing; `mpkg link --force <pkg>` moves it to `*.mpkg-orig` |
+| dangling | the link is right but its file is gone from the store tree | reinstalls the package |
+| tree is gone | the whole store tree was deleted | reinstalls the package |
+
+Links nobody owns that point at nothing are reported too: into the store
+(left by a package that is gone; `--fix` and `mpkg prune` delete them), or
+anywhere else (a warning; mpkg never deletes what it did not make). After
+repairing, `--fix` runs the checks again, so what it prints last is the state
+it left.
 
 ## Environments
 
@@ -173,6 +231,11 @@ assets use:
 | `${_UARCH}` | `x86_64` | `aarch64` | `aarch64` |
 | `${_TRIPLE}` | `x86_64-unknown-linux-musl` | `aarch64-unknown-linux-musl` | `aarch64-apple-darwin` |
 
+A tree's top-level `.mpkg/` directory is never linked into the prefix. It is
+for a payload that other links point into but that should not be spread over
+the prefix itself: `go` keeps its GOROOT (some 15000 files) in
+`.mpkg/goroot` and links only `bin/go` and `bin/gofmt`.
+
 Instead of a listing URL, a package can set `MPKG_GITHUB_REPO="owner/repo"`;
 discovery then takes that repository's latest release, and the version is the
 first dotted number in its tag (`v1.2.3`, `release-2.1.13-stable`, `3.7c`).
@@ -221,13 +284,22 @@ at the system CA bundle, and `curl` is configured with an explicit
   plugin's links land. GTK's GSettings schemas are compiled in
   `$MPKG_PREFIX/share/glib-2.0/schemas`, found through `XDG_DATA_DIRS`.
 
+## Go
+
+`mpkg install go` installs the newest stable Go from go.dev, after checking
+the archive against the SHA-256 go.dev publishes. The go command finds its
+GOROOT from its own location, so nothing has to set GOROOT; `env.sh` puts
+`$GOBIN`, or else `$GOPATH/bin` (`~/go/bin` by default), on `PATH`, so what
+`go install` builds is found. `go` is part of `workspace`.
+
 ## Environment
 
 `MPKG_PREFIX` (default `$HOME/.local`), `MPKG_WORK`, `MPKG_JOBS`,
 `MPKG_GNU_MIRROR`, `SSL_CERT_FILE`, `MPKG_OS`, `MPKG_ARCH`, `MPKG_MAKE`
 (GNU make; `gmake` is picked up on the BSDs), `MPKG_GIT_RUST` (`yes`/`no`;
 by default git's Rust parts are built only when a working `cargo` exists,
-otherwise git is built with `NO_RUST`).
+otherwise git is built with `NO_RUST`), `MPKG_UPDATE_INTERVAL` and
+`MPKG_NO_UPDATE_CHECK` (see "Updates and upgrade notices").
 
 Commands that change the prefix take a lock, `$MPKG_PREFIX/var/mpkg/lock`, so
 two mpkg runs cannot interleave. A lock left by a crashed run on the same host
@@ -244,7 +316,7 @@ files is touched, and `mpkg remove shell-config` takes the blocks out again.
 | file | contents | sourced from |
 | --- | --- | --- |
 | `share/mpkg/env.sh` | environment variables only (POSIX sh, re-sourcing is harmless) | `~/.profile`, `~/.bash_profile` (only if it exists), `~/.bashrc`, `~/.zprofile`, `~/.zshrc` |
-| `share/mpkg/interactive.sh` | `mpkg_activate`, Oh My Zsh, starship, nvm, RVM | `~/.bashrc`, `~/.zshrc` |
+| `share/mpkg/interactive.sh` | `mpkg_activate`, Oh My Zsh, starship, nvm, RVM, the upgrade notice | `~/.bashrc`, `~/.zshrc` |
 
 bash and zsh files are only written when that shell is installed, and Oh My
 Zsh is only a dependency where zsh exists. `env.sh` moves the prefix to the

@@ -14,6 +14,7 @@ MPKG_DEPENDS=(
     luarocks
     nodejs
     rust
+    go
     uv
     neovim
     nvim-config
