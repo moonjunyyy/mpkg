@@ -41,6 +41,60 @@ mpkg::detect_make() {
 }
 
 # ---------------------------------------------------------------------------
+# What mpkg takes from the system
+# ---------------------------------------------------------------------------
+#
+# mpkg manages userspace on top of a system it does not touch: the OS, its C
+# library, a shell, tar/gzip, a downloader and the C compiler -- on macOS the
+# Command Line Tools (clang, ld, the SDK). Those are never packages here. What
+# cc and sh alone can produce (make, m4, perl, pkgconf, ...) is a package that
+# is built where the system lacks it (MPKG_PROVIDES_CMD).
+
+# Is <cmd> really usable? On macOS /usr/bin/cc, make, git and friends exist
+# even without the Command Line Tools: shims that only offer to install them.
+mpkg::have_cmd() {
+    command -v "$1" >/dev/null 2>&1 || return 1
+    [[ "${_OS:-}" == macos ]] || return 0
+    case "$1" in
+        cc|c++|gcc|g++|clang|clang++|ld|make|git)
+            if [[ -z "${_MPKG_CLT:-}" ]]; then
+                xcode-select -p >/dev/null 2>&1 && _MPKG_CLT=yes || _MPKG_CLT=no
+            fi
+            [[ "${_MPKG_CLT}" == yes ]] ;;
+    esac
+}
+
+# Where a system tool mpkg does not build comes from, on this OS.
+mpkg::system_hint() {
+    case "${_OS:-}:$1" in
+        macos:cc|macos:c++|macos:gcc|macos:g++|macos:clang|macos:clang++|macos:ld|macos:make|macos:git)
+            echo "install the Command Line Tools: xcode-select --install" ;;
+        macos:*)
+            echo "it comes with macOS; check PATH" ;;
+        *:cc|*:c++|*:gcc|*:g++|*:ld)
+            echo "install the distribution's compiler (build-essential; gcc gcc-c++; ...)" ;;
+        *)
+            echo "install the distribution's $1 package" ;;
+    esac
+}
+
+# What every install needs before anything is resolved: a downloader, and tar
+# with gzip. Reports what is missing; status 1 then.
+mpkg::base_check() {
+    local t rc=0
+    if ! mpkg::have_cmd curl && ! mpkg::have_cmd wget; then
+        mpkg::err "neither curl nor wget is available: $(mpkg::system_hint curl)"
+        rc=1
+    fi
+    for t in tar gzip; do
+        mpkg::have_cmd "${t}" && continue
+        mpkg::err "${t} is missing: $(mpkg::system_hint "${t}")"
+        rc=1
+    done
+    return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 

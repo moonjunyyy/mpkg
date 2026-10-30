@@ -77,10 +77,11 @@ mpkg::meta() {
 mpkg::check_requires() {
     local name="$1" c missing=()
     for c in $(mpkg::meta "${name}" reqs); do
-        command -v "${c}" >/dev/null 2>&1 || missing+=("${c}")
+        mpkg::have_cmd "${c}" || missing+=("${c}")
     done
     (( ${#missing[@]} == 0 )) && return 0
     mpkg::err "${name} needs these system tools first: ${missing[*]}"
+    for c in "${missing[@]}"; do mpkg::say "      ${c}: $(mpkg::system_hint "${c}")"; done
     return 1
 }
 
@@ -111,7 +112,7 @@ mpkg::req_providers() {
     MPKG_REQ_PROVIDERS=()
     mpkg::meta_load "$1" || return 1
     for c in ${MPKG_META_REQS[$1]:-}; do
-        command -v "${c}" >/dev/null 2>&1 && continue
+        mpkg::have_cmd "${c}" && continue
         mpkg::provider_of "${c}"
         [[ -n "${MPKG_PROVIDER}" && "${MPKG_PROVIDER}" != "$1" ]] \
             && MPKG_REQ_PROVIDERS+=("${MPKG_PROVIDER}")

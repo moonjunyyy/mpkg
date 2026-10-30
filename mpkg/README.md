@@ -20,6 +20,17 @@ links a `bin/mpkg` wrapper into `$MPKG_PREFIX/bin`. The version is
 the checkout changed replaces the tree. The installed copy remembers its
 checkout; after a `git pull` there, `mpkg upgrade mpkg` picks up the changes.
 
+## What it takes from the system
+
+mpkg manages userspace on a system it never touches. The OS, its C library,
+`sh`, `tar`/`gzip`, `curl` or `wget` and a C compiler are the system's -- on
+macOS the Command Line Tools (`xcode-select --install`), whose clang, ld and
+SDK nothing else can stand in for. Every install checks the first few;
+`mpkg doctor` checks them all and says where each one comes from on this OS.
+What a C compiler and a shell alone can produce is a package, built only
+where the system lacks it: `make` (bootstrapped through GNU make's `build.sh`
+when there is no make at all), `m4`, `perl`, `pkgconf`.
+
 ## Layout
 
 ```
