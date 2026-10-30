@@ -4,6 +4,7 @@ MPKG_TITLE="Perl"
 MPKG_DESC="Perl 5 interpreter"
 MPKG_HOMEPAGE="https://www.perl.org/"
 MPKG_PROBE_CMD="perl"
+MPKG_PROVIDES_CMD=(perl)
 MPKG_REQUIRES_CMD=(cc make)
 
 # Even minor versions are stable (5.42.x); odd ones (5.43.x) are development.

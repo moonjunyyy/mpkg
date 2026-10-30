@@ -18,8 +18,8 @@
 #       }
 
 MPKG_METHODS=(
-    run describe env discover fetch prepare configure build install
-    link cleanup post_install verify remove
+    run describe discover fetch prepare configure build install
+    link cleanup post_install verify remove shell_env shell_rc
 )
 
 declare -A MPKG_IMPL=()
@@ -100,8 +100,17 @@ mpkg::fields_reset() {
     MPKG_HOMEPAGE=""
     MPKG_DEPENDS=()
     MPKG_OPTDEPENDS=()
-    # System tools that must already exist; mpkg checks but never installs them.
+    # System tools that must be on PATH. One the machine lacks becomes a
+    # dependency on the package that provides it (MPKG_PROVIDES_CMD), if any;
+    # otherwise mpkg only checks and stops.
     MPKG_REQUIRES_CMD=()
+    # Commands this package puts on PATH, for the above.
+    MPKG_PROVIDES_CMD=()
+
+    # What the package adds to every shell, and to the builds after it
+    # (lib/shell.sh): MPKG_ENV directives, plus mpkg_shell_env / mpkg_shell_rc.
+    MPKG_ENV=()
+    MPKG_SHELL_ORDER=50
 
     # Version discovery / probing.
     MPKG_PROBE_CMD="${MPKG_NAME}"

@@ -6,6 +6,9 @@ MPKG_HOMEPAGE="https://curl.se/"
 MPKG_PROBE_CMD="curl"
 MPKG_DEPENDS=(openssl)
 MPKG_REQUIRES_CMD=(cc make)
+# Optional for curl (compressed transfers), but built first, so it links the
+# same zlib git and ruby will.
+mpkg::have_header zlib.h || MPKG_DEPENDS+=(zlib)
 
 MPKG_LISTING_URL="https://github.com/curl/curl/tags"
 # curl's git tags use underscores (curl-8_22_0) while its tarballs use dots.

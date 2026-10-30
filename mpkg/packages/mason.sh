@@ -19,8 +19,6 @@ MPKG_PROBE_CMD=""
 MPKG_DEPENDS=(nvim-config nodejs uv rust jdk curl git)
 MPKG_REQUIRES_CMD=(unzip tar gzip)
 
-MPKG_NVIM_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/nvim"
-
 mpkg_run() {
     local plugins servers
     command -v nvim >/dev/null 2>&1 || { mpkg::err "nvim is not on PATH"; return 1; }
@@ -48,11 +46,11 @@ mpkg_run() {
     MPKG_STATUS="installed"
 }
 
-# lspconfig names from the `servers` of lua/config/languages.lua. The installed
-# copy wins, since that is what nvim actually runs.
+# lspconfig names from the `servers` of lua/config/languages.lua, in the
+# configuration nvim actually runs: asked of nvim, not assumed.
 mpkg::mason_servers() {
-    local langs="${MPKG_NVIM_DIR}/lua/config/languages.lua"
-    [[ -r "${langs}" ]] || langs="${MPKG_ROOT}/nvim/lua/config/languages.lua"
+    local langs
+    langs="$(nvim --headless --clean +'lua io.write(vim.fn.stdpath("config"))' +qa 2>/dev/null)/lua/config/languages.lua"
     [[ -r "${langs}" ]] || return 0
     local script="${MPKG_WORK}/mason-servers.lua"
     MPKG_TMPFILES+=(mason-servers.lua)

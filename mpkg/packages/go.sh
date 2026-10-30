@@ -5,8 +5,9 @@
 # finds from its own real location, so nothing has to set GOROOT. The tree
 # goes into the package's private .mpkg/goroot, which is not linked into the
 # prefix (it is ~15000 files nothing else reads); bin/ carries go and gofmt as
-# links into it. What `go install` builds lands in $(go env GOPATH)/bin,
-# ~/go/bin by default, which env.sh puts on PATH.
+# links into it. What `go install` builds lands in $GOBIN, else the first
+# GOPATH entry's bin/ (~/go/bin); MPKG_ENV puts that on PATH in every shell
+# and in mpkg's own builds after this one (mason's gopls, for one).
 
 mpkg_inherit tarcommon
 
@@ -16,6 +17,10 @@ MPKG_HOMEPAGE="https://go.dev/"
 MPKG_PROBE_CMD="go"
 MPKG_DEPENDS=(jq)
 MPKG_DESTDIR='go-${version}'
+MPKG_ENV=(
+    'default GOPATH ${HOME}/go'
+    'path PATH ${GOBIN:-${GOPATH%%:*}/bin}'
+)
 
 mpkg_discover() {
     local releases="go-releases.json" row
@@ -42,11 +47,8 @@ mpkg_fetch() {
     rm -rf "${MPKG_ASSET_STEM}"
     mpkg::download "${MPKG_ASSET_URL}" "${MPKG_ASSET_FILE}" || return 1
 
-    local sum=""
-    if command -v sha256sum >/dev/null 2>&1; then sum="$(sha256sum "${MPKG_ASSET_FILE}")"
-    elif command -v shasum >/dev/null 2>&1;  then sum="$(shasum -a 256 "${MPKG_ASSET_FILE}")"
-    fi
-    sum="${sum%% *}"
+    local sum
+    sum="$(mpkg::sha256 < "${MPKG_ASSET_FILE}")"
     if [[ -z "${sum}" ]]; then
         mpkg::warn "go: no sha256sum or shasum; the archive is not verified"
     elif [[ "${sum}" != "${MPKG_GO_SHA256}" ]]; then
@@ -75,9 +77,14 @@ mpkg_install() {
     mpkg::step "installed into ${dest}"
 }
 
-# Tools later packages install with `go install` (gopls for mason) go here.
-mpkg_env() {
-    environment_prepend "PATH" "${GOBIN:-${GOPATH:-${HOME}/go}/bin}"
+# MPKG_ENV only adds a directory that exists; create it now rather than on
+# the first `go install`, so that what that builds is on PATH straight away.
+# Asked of go itself, so `go env -w GOBIN=...` is honoured.
+mpkg_post_install() {
+    local go="${MPKG_SOFT}/${MPKG_DEST_NAME}/bin/go" bin
+    bin="$("${go}" env GOBIN 2>/dev/null)"
+    [[ -n "${bin}" ]] || bin="$("${go}" env GOPATH 2>/dev/null | cut -d: -f1)/bin"
+    [[ "${bin}" == /* ]] && mkdir -p "${bin}"
     return 0
 }
 

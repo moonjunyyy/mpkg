@@ -7,8 +7,11 @@ return {
         branch = 'main',
         lazy = false,
         build = ':TSUpdate',
-        config = function()
-            local parsers = require('config.languages').parsers
+        -- languages.lua's parsers, plus the extend.parsers of modules.
+        opts = { parsers = vim.list_extend({}, require('config.languages').parsers) },
+        opts_extend = { 'parsers' },
+        config = function(_, opts)
+            local parsers = opts.parsers
             local ts = require('nvim-treesitter')
             ts.setup()
 

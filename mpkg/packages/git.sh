@@ -5,6 +5,8 @@ MPKG_DESC="Distributed version control system"
 MPKG_HOMEPAGE="https://git-scm.com/"
 MPKG_PROBE_CMD="git"
 MPKG_DEPENDS=(curl openssl)
+# git cannot build without zlib.
+mpkg::have_header zlib.h || MPKG_DEPENDS+=(zlib)
 # Only with --with-optional: git builds without Rust, see mpkg::git_setup_rust.
 MPKG_OPTDEPENDS=(rust)
 MPKG_REQUIRES_CMD=(cc make)

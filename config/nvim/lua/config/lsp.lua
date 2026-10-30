@@ -59,6 +59,18 @@ vim.lsp.config('markdown_oxide', {
     end,
 })
 
+-- Servers that feature modules bring (extend.servers in lua/modules/*.lua).
+-- Mason does not install these; the module's own toolchain provides them.
+for name, cfg in pairs(require('config.loader').servers) do
+    vim.lsp.config(name, cfg)
+    vim.lsp.enable(name)
+end
+
+-- Code lenses, for every buffer and server that supports them. Since 0.12
+-- Neovim requests, redraws and drops them on attach/detach itself:
+-- enable() replaced the refresh() autocmds and clear().
+vim.lsp.codelens.enable(true)
+
 local group = vim.api.nvim_create_augroup('user_lsp', { clear = true })
 
 -- One augroup per buffer and feature, recreated (clear = true) on every
@@ -72,8 +84,15 @@ vim.api.nvim_create_autocmd('LspAttach', {
     callback = function(args)
         local buf = args.buf
         local client = assert(vim.lsp.get_client_by_id(args.data.client_id))
+        -- A buffer-local key that is already there belongs to a filetype
+        -- plugin (lean.nvim's \\, say) or to an earlier attach: keep it.
         local function map(lhs, rhs, desc, mode)
-            vim.keymap.set(mode or 'n', lhs, rhs, { buffer = buf, silent = true, desc = desc })
+            for _, m in ipairs(type(mode) == 'table' and mode or { mode or 'n' }) do
+                local cur = vim.api.nvim_buf_call(buf, function() return vim.fn.maparg(lhs, m, false, true) end)
+                if cur.buffer ~= 1 then
+                    vim.keymap.set(m, lhs, rhs, { buffer = buf, silent = true, desc = desc })
+                end
+            end
         end
 
         -- The mappings this configuration has always had, next to the defaults above.
@@ -103,17 +122,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         end
 
         if client:supports_method('textDocument/codeLens', buf) then
-            if vim.lsp.codelens.enable then -- Neovim 0.12+
-                vim.lsp.codelens.enable(true, { bufnr = buf })
-            else
-                vim.api.nvim_create_autocmd({ 'BufEnter', 'CursorHold', 'InsertLeave' }, {
-                    group = buf_group('codelens', buf),
-                    buffer = buf,
-                    callback = function() vim.lsp.codelens.refresh({ bufnr = buf }) end,
-                })
-                vim.lsp.codelens.refresh({ bufnr = buf })
-            end
-            map('<leader>lR', vim.lsp.codelens.run, 'Run code lens')
+            map('<leader>lR', vim.lsp.codelens.run, 'Run code lens') -- also grx
         end
 
         -- Highlight other uses of the symbol under the cursor.
@@ -133,9 +142,10 @@ vim.api.nvim_create_autocmd('LspAttach', {
     end,
 })
 
--- When a server goes away, drop a feature's autocmds only if no other server
--- on the buffer still provides it. (Clearing them all made highlights and code
--- lenses stop for every server whenever any one of them exited.)
+-- When a server goes away, drop the highlight autocmds only if no other server
+-- on the buffer still provides it. (Clearing them all made highlights stop for
+-- every server whenever any one of them exited.) Code lenses need nothing
+-- here: Neovim tracks those per client.
 vim.api.nvim_create_autocmd('LspDetach', {
     group = group,
     callback = function(args)
@@ -151,9 +161,6 @@ vim.api.nvim_create_autocmd('LspDetach', {
             if vim.api.nvim_buf_is_valid(buf) then
                 vim.api.nvim_buf_call(buf, vim.lsp.buf.clear_references)
             end
-        end
-        if not still('textDocument/codeLens') then
-            pcall(vim.api.nvim_del_augroup_by_name, ('user_lsp_codelens_%d'):format(buf))
         end
     end,
 })

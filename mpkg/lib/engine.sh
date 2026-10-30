@@ -56,12 +56,14 @@ mpkg::install_one() {
         return 1
     fi
 
-    # Environment hooks run even when nothing was rebuilt: later packages still
-    # need this one's include/lib paths on CPATH and friends.
-    mpkg::optional env
-
     case "${MPKG_STATUS}" in
         current)
+            # Present already (an installer-script package finds its tool on
+            # the system): recorded all the same, so that its environment is
+            # kept and 'mpkg remove' knows it.
+            mpkg::db_installed "${name}" \
+                || mpkg::db_put "${name}" "${MPKG_INSTALLED_VERSION}" "" "${MPKG_KIND:-unknown}" \
+                                "${MPKG_DEPENDS[@]:-}"
             mpkg::ok "already up to date (${MPKG_INSTALLED_VERSION})"
             ;;
         skipped)
@@ -79,7 +81,9 @@ mpkg::install_one() {
             mpkg::ok "installed ${MPKG_VERSION:-}"
             ;;
     esac
-    hash -r 2>/dev/null
+    # Last, because post-install may create what the environment points at
+    # (nvm's first node). The packages built after this one see it too.
+    mpkg::shell_write
     return 0
 }
 
@@ -103,12 +107,13 @@ mpkg::install() {
     done
 
     (( ${#satisfied[@]} )) && mpkg::say "Already satisfied: ${satisfied[*]}"
-    # A satisfied dependency is not revisited, but its environment hook still
-    # has to run: mason needs nvm's npm on PATH even when nodejs was installed
-    # by an earlier run.
-    for p in "${satisfied[@]}"; do
-        mpkg::class_load "${p}" >/dev/null 2>&1 && mpkg::optional env
-    done
+    # Satisfied dependencies are not revisited; their environment (mason needs
+    # nvm's npm) came with env.sh when mpkg started. A prefix from before
+    # packages declared their environment has no fragments yet: write them.
+    if [[ ! -d "$(mpkg::shell_dir)" && -n "$(mpkg::db_list)" && ${MPKG_DRY_RUN:-0} -eq 0 ]]; then
+        mpkg::say "Writing the shell environment of the installed packages"
+        mpkg::shell_sync
+    fi
     if (( ${#plan[@]} == 0 )); then
         mpkg::say "Nothing to do."
         return 0
@@ -166,6 +171,7 @@ mpkg::remove_one() {
         mpkg::step "deleted ${MPKG_SOFT}/${dest}"
     fi
     mpkg::db_forget "${name}"
+    mpkg::shell_forget "${name}"
     mpkg::ok "removed ${name}"
 }
 

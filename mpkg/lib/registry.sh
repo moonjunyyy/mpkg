@@ -6,7 +6,7 @@
 declare -A MPKG_META_SEEN=()
 declare -A MPKG_META_TITLE=() MPKG_META_KIND=() MPKG_META_DESC=()
 declare -A MPKG_META_DEPS=()  MPKG_META_OPTDEPS=() MPKG_META_PROBE=()
-declare -A MPKG_META_HOME=()  MPKG_META_REQS=()
+declare -A MPKG_META_HOME=()  MPKG_META_REQS=() MPKG_META_PROVIDES=()
 
 # Every installable package: packages/*.sh minus the *common.sh base classes.
 mpkg::available() {
@@ -37,6 +37,7 @@ mpkg::meta_load() {
         printf 'deps\t%s\n'       "${MPKG_DEPENDS[*]:-}"
         printf 'optdeps\t%s\n'    "${MPKG_OPTDEPENDS[*]:-}"
         printf 'reqs\t%s\n'       "${MPKG_REQUIRES_CMD[*]:-}"
+        printf 'provides\t%s\n'   "${MPKG_PROVIDES_CMD[*]:-}"
     )"
     rc=$?
     (( rc != 0 )) && { mpkg::err "cannot read metadata for '${name}'"; return 1; }
@@ -51,6 +52,7 @@ mpkg::meta_load() {
             deps)    MPKG_META_DEPS[$name]="${val}" ;;
             optdeps) MPKG_META_OPTDEPS[$name]="${val}" ;;
             reqs)    MPKG_META_REQS[$name]="${val}" ;;
+            provides) MPKG_META_PROVIDES[$name]="${val}" ;;
         esac
     done <<< "${out}"
     MPKG_META_SEEN[$name]=1
@@ -80,4 +82,39 @@ mpkg::check_requires() {
     (( ${#missing[@]} == 0 )) && return 0
     mpkg::err "${name} needs these system tools first: ${missing[*]}"
     return 1
+}
+
+# provider_of <cmd> — the package whose MPKG_PROVIDES_CMD names <cmd>, in
+# MPKG_PROVIDER (empty when none). The index reads every package once, and
+# only the first time a required command turns out to be missing.
+declare -A MPKG_PROVIDER_OF=()
+MPKG_PROVIDER_INDEXED=0
+mpkg::provider_of() {
+    local p c
+    MPKG_PROVIDER=""
+    if (( ! MPKG_PROVIDER_INDEXED )); then
+        for p in $(mpkg::available); do
+            mpkg::meta_load "${p}" 2>/dev/null || continue
+            for c in ${MPKG_META_PROVIDES[$p]:-}; do
+                [[ -n "${MPKG_PROVIDER_OF[$c]:-}" ]] || MPKG_PROVIDER_OF[$c]="${p}"
+            done
+        done
+        MPKG_PROVIDER_INDEXED=1
+    fi
+    MPKG_PROVIDER="${MPKG_PROVIDER_OF[$1]:-}"
+}
+
+# req_providers <pkg> — in MPKG_REQ_PROVIDERS, the packages that provide the
+# system tools <pkg> requires and this machine lacks.
+mpkg::req_providers() {
+    local c
+    MPKG_REQ_PROVIDERS=()
+    mpkg::meta_load "$1" || return 1
+    for c in ${MPKG_META_REQS[$1]:-}; do
+        command -v "${c}" >/dev/null 2>&1 && continue
+        mpkg::provider_of "${c}"
+        [[ -n "${MPKG_PROVIDER}" && "${MPKG_PROVIDER}" != "$1" ]] \
+            && MPKG_REQ_PROVIDERS+=("${MPKG_PROVIDER}")
+    done
+    return 0
 }

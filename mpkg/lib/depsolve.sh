@@ -28,6 +28,13 @@ mpkg::_visit() {
             mpkg::_visit "${dep}" "${chain:+${chain} -> }${name}" || return 1
         done
     fi
+    # System tools it requires that this machine lacks, where a package
+    # provides them (pkgconf for pkg-config, perl, m4, ...).
+    local -a provs=()
+    mpkg::req_providers "${name}" && provs=("${MPKG_REQ_PROVIDERS[@]}")
+    for dep in "${provs[@]}"; do
+        mpkg::_visit "${dep}" "${chain:+${chain} -> }${name}" || return 1
+    done
 
     MPKG_DEP_STATE[$name]="done"
     MPKG_ORDER+=("${name}")
@@ -65,7 +72,8 @@ mpkg::dep_tree() {
     printf '%s%s%s %s\n' "${marker}" "${name}" "$([[ ${mark} == '*' ]] && printf ' [installed]')" \
         "$([[ -n "${MPKG_META_DEPS[$name]:-}" ]] && printf '')"
 
-    deps=(${MPKG_META_DEPS[$name]:-})
+    mpkg::req_providers "${name}" >/dev/null 2>&1
+    deps=(${MPKG_META_DEPS[$name]:-} "${MPKG_REQ_PROVIDERS[@]}")
     n=${#deps[@]}
     local child_indent="${indent}"
     if [[ -n "${3:-}" ]]; then

@@ -16,6 +16,7 @@ return {
     {
         'folke/which-key.nvim',
         event = 'VeryLazy',
+        opts_extend = { 'spec' }, -- modules add entries (extend.groups)
         opts = {
             preset = 'modern',
             spec = {
@@ -31,19 +32,5 @@ return {
         keys = {
             { '<leader>?', function() require('which-key').show({ global = false }) end, desc = 'Buffer keymaps' },
         },
-    },
-
-    {
-        'OXY2DEV/markview.nvim',
-        -- Not lazy-loaded: markview defers its own work, and loading it on
-        -- FileType sometimes missed the first markdown buffer (upstream advice).
-        lazy = false,
-        config = function()
-            local presets = require('markview.presets')
-            require('markview').setup({
-                markdown = { headings = presets.headings.slanted },
-                preview = { icon_provider = 'devicons' },
-            })
-        end,
     },
 }

@@ -9,6 +9,9 @@ MPKG_DESC="PDF rendering library, with the GLib binding and command-line utils"
 MPKG_HOMEPAGE="https://poppler.freedesktop.org/"
 MPKG_PROBE_CMD="pdfinfo"
 MPKG_REQUIRES_CMD+=(pkg-config)
+# poppler-glib needs GLib and cairo; where the system has neither, they come
+# from GTK's Meson subprojects, installed with gtk.
+MPKG_DEPENDS+=(gtk)
 
 MPKG_LISTING_URL="https://poppler.freedesktop.org/"
 MPKG_TAG_PATTERN='poppler-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz'

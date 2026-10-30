@@ -173,32 +173,48 @@ mpkg::core_init() {
     export MPKG_PREFIX MPKG_SOFT MPKG_STATE MPKG_DB MPKG_LOGDIR MPKG_WORK MPKG_ENVS
     export _PREFIX INSTALLATION_PATH
 
-    mkdir -p "${MPKG_PREFIX}"/{bin,lib,lib64,include,share,soft,ssl} \
-             "${MPKG_DB}" "${MPKG_LOGDIR}" "${MPKG_WORK}" 2>/dev/null
+    # Library directories. lib64 is the Linux multilib convention; Apple's
+    # toolchain has only lib, and an empty lib64 there is one more search path
+    # for ld to look at on every link.
+    case "${_OS}" in
+        macos) MPKG_LIBDIRS="lib" ;;
+        *)     MPKG_LIBDIRS="lib lib64" ;;
+    esac
+    export MPKG_LIBDIRS
 
-    environment_prepend "PATH"            "/usr/bin"
-    environment_prepend "PATH"            "${HOME}/.cargo/bin"
-    environment_prepend "PATH"            "${MPKG_PREFIX}/bin"
-    environment_prepend "CPATH"           "${MPKG_PREFIX}/include"
-    environment_prepend "CXXPATH"         "${MPKG_PREFIX}/include"
-    # The system library directories are the toolchain's defaults and are left
-    # off: on macOS /usr/lib64 does not exist and /usr/lib holds no linkable
-    # libraries (they live in the SDK), and Apple's ld warns about both.
-    environment_prepend "LIBRARY_PATH"    "${MPKG_PREFIX}/lib64"
-    environment_prepend "LIBRARY_PATH"    "${MPKG_PREFIX}/lib"
-    # dyld ignores LD_LIBRARY_PATH; macOS binaries find the prefix via rpath.
-    if [[ "${_OS}" != "macos" ]]; then
-        environment_prepend "LD_LIBRARY_PATH" "${MPKG_PREFIX}/lib64"
-        environment_prepend "LD_LIBRARY_PATH" "${MPKG_PREFIX}/lib"
+    # Where the system's own headers are: the SDK on macOS (it has no
+    # /usr/include), the usual directories elsewhere. mpkg::have_header looks
+    # here to decide whether a library has to be built (zlib, libyaml). Set
+    # in the environment, it is taken as is (MPKG_SYSINC=/none: build them all).
+    if [[ -z "${MPKG_SYSINC:-}" ]]; then
+        MPKG_SYSINC="/usr/local/include:/usr/include"
+        if [[ "${_OS}" == macos ]]; then
+            local sdk
+            sdk="$(xcrun --show-sdk-path 2>/dev/null)"
+            [[ -n "${sdk}" ]] && MPKG_SYSINC="${sdk}/usr/include:${MPKG_SYSINC}"
+        fi
     fi
-    environment_prepend "MANPATH"         "/usr/share/man"
-    environment_prepend "MANPATH"         "${MPKG_PREFIX}/share/man"
+    export MPKG_SYSINC
+
+    local sub
+    for sub in bin ${MPKG_LIBDIRS} include share soft ssl; do
+        mkdir -p "${MPKG_PREFIX}/${sub}" 2>/dev/null
+    done
+    mkdir -p "${MPKG_DB}" "${MPKG_LOGDIR}" "${MPKG_WORK}" 2>/dev/null
+
+    # What only a build needs. The system library directories are the
+    # toolchain's defaults and are left off: on macOS /usr/lib64 does not exist
+    # and /usr/lib holds no linkable libraries (they live in the SDK), and
+    # Apple's ld warns about both.
+    environment_prepend "PATH"            "/usr/bin"
     local d
     for d in /usr/lib/pkgconfig /usr/lib64/pkgconfig /usr/libdata/pkgconfig; do
         [[ -d "${d}" ]] && environment_prepend "PKG_CONFIG_PATH" "${d}"
     done
-    environment_prepend "PKG_CONFIG_PATH" "${MPKG_PREFIX}/lib64/pkgconfig"
-    environment_prepend "PKG_CONFIG_PATH" "${MPKG_PREFIX}/lib/pkgconfig"
+    # Then the environment every shell gets: the prefix and whatever the
+    # installed packages declare (lib/shell.sh) -- ~/.cargo/bin, JAVA_HOME, ...
+    mpkg::env_load
+    environment_prepend "CXXPATH"         "${MPKG_PREFIX}/include"
 
     mpkg::detect_ca
     # Make the CA bundle authoritative for everything we spawn, including the
@@ -265,6 +281,11 @@ mpkg::is_system_dir() {
     case "${1%/}" in
         /lib|/lib64|/usr/lib|/usr/lib64|/usr/include) return 0 ;;
     esac
+    # Apple's ld and clang search /usr/local/lib and /usr/local/include by
+    # default as well; naming them again only repeats the default.
+    if [[ "${_OS:-}" == macos ]]; then
+        case "${1%/}" in /usr/local/lib|/usr/local/include) return 0 ;; esac
+    fi
     return 1
 }
 
@@ -284,6 +305,24 @@ mpkg::path_flags() {
     printf '%s' "${out}"
 }
 
+# path_clean <VAR> [all] — rewrite the colon list <VAR> in place: each
+# directory once, only those that exist, and, unless "all", none of the
+# toolchain's own defaults (mpkg::is_system_dir). Empty afterwards: unset.
+mpkg::path_clean() {
+    local var="$1" all="${2:-}" d seen=":" out=""
+    local -a dirs
+    IFS=':' read -r -a dirs <<< "${!var:-}"
+    for d in "${dirs[@]}"; do
+        [[ "${d}" == / ]] || d="${d%/}"
+        [[ -n "${d}" && -d "${d}" ]] || continue
+        [[ -z "${all}" ]] && mpkg::is_system_dir "${d}" && continue
+        [[ "${seen}" == *":${d}:"* ]] && continue
+        seen="${seen}${d}:"
+        out="${out:+${out}:}${d}"
+    done
+    if [[ -n "${out}" ]]; then export "${var}=${out}"; else unset "${var}"; fi
+}
+
 # Recomputed before every package: earlier installs extend CPATH / LIBRARY_PATH.
 # -rpath is what lets a freshly built git find libcurl.so.4 without the caller
 # having LD_LIBRARY_PATH set.
@@ -291,11 +330,28 @@ mpkg::path_flags() {
 # Every flag must be clean on every linker: Ruby's configure, among others,
 # treats any linker warning as an invalid LDFLAGS, and Apple's ld warns about
 # missing -L directories and repeated -rpath entries.
+#
+# The search-path variables reach the toolchain directly as well, not only
+# through these flags: gcc and Apple's clang hand every LIBRARY_PATH entry to
+# ld as a -L. A directory that does not exist there (/usr/lib64 on a Mac, left
+# by a shell profile) makes ld warn on every link -- and Ruby's configure then
+# rejects an LDFLAGS that never contained it. So the variables are cleaned
+# first, not just the flags.
 compute_build_flags() {
+    mpkg::path_clean LIBRARY_PATH
+    mpkg::path_clean CPATH
+    mpkg::path_clean CXXPATH
+    mpkg::path_clean PKG_CONFIG_PATH all
+    mpkg::path_clean LD_LIBRARY_PATH all
+
+    local rpath="" sub
+    for sub in ${MPKG_LIBDIRS:-lib lib64}; do
+        rpath="${rpath:+${rpath}:}${MPKG_PREFIX}/${sub}"
+    done
     _CFLAGS="$(  mpkg::path_flags -I "${CPATH:-}")"
     _CXXFLAGS="$(mpkg::path_flags -I "${CXXPATH:-}")"
     _LDFLAGS="$( mpkg::path_flags -L "${LIBRARY_PATH:-}")"
-    _LDFLAGS="${_LDFLAGS}$(mpkg::path_flags -Wl,-rpath, "${MPKG_PREFIX}/lib:${MPKG_PREFIX}/lib64")"
+    _LDFLAGS="${_LDFLAGS}$(mpkg::path_flags -Wl,-rpath, "${rpath}")"
     _CFLAGS="${_CFLAGS% }"; _CXXFLAGS="${_CXXFLAGS% }"; _LDFLAGS="${_LDFLAGS% }"
     export _CFLAGS _CXXFLAGS _LDFLAGS
 }

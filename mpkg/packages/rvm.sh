@@ -10,8 +10,8 @@ MPKG_REQUIRES_CMD=(bash)
 MPKG_GUARD_DIR="${HOME}/.rvm"
 MPKG_VERSION_CMD="${HOME}/.rvm/bin/rvm --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'"
 MPKG_SCRIPT_URL="https://get.rvm.io"
-# --ignore-dotfiles: the env file written by shell-config loads rvm; the
-# installer must not append its own lines to ~/.bashrc, ~/.zshrc and friends.
+# --ignore-dotfiles: this package's shell fragments load rvm; the installer
+# must not append its own lines to ~/.bashrc, ~/.zshrc and friends.
 # --autolibs=read-fail: when a Ruby build needs system libraries, report them
 # and stop instead of trying to install them with sudo (there is no root here).
 MPKG_SCRIPT_ARGS=(stable --ignore-dotfiles --autolibs=read-fail)
@@ -33,9 +33,12 @@ mpkg_install() {
     mpkg_super install
 }
 
-mpkg_env() {
-    environment_prepend "PATH" "${HOME}/.rvm/bin"
-    return 0
+MPKG_ENV=('path PATH ${HOME}/.rvm/bin')
+# Last among the interactive fragments: RVM wants its PATH entries in front.
+MPKG_SHELL_ORDER=90
+
+mpkg_shell_rc() {
+    printf '%s\n' '[ -s "${HOME}/.rvm/scripts/rvm" ] && . "${HOME}/.rvm/scripts/rvm"'
 }
 
 mpkg_verify() {

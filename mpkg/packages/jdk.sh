@@ -57,10 +57,7 @@ mpkg_install() {
     mpkg::step "installed into ${dest}"
 }
 
-mpkg_env() {
-    [[ -x "${MPKG_PREFIX}/libexec/jdk/bin/java" ]] && export JAVA_HOME="${MPKG_PREFIX}/libexec/jdk"
-    return 0
-}
+MPKG_ENV=('set JAVA_HOME ${MPKG_PREFIX}/libexec/jdk')
 
 mpkg_verify() {
     "${MPKG_SOFT}/${MPKG_DEST_NAME}/bin/javac" -version >/dev/null 2>&1 && return 0

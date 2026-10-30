@@ -4,7 +4,7 @@
 # is what `mpkg upgrade` would do first, and installs nothing. What it finds is
 # cached in $MPKG_STATE/updates, one "<pkg> <installed> <available>" line per
 # package that is behind, so that the shell can announce upgrades at start-up
-# without touching the network (shell-config's interactive.sh):
+# without touching the network (shell/interactive.sh):
 #
 #   mpkg: 2 upgrade(s) available: git neovim  (mpkg upgrade)
 #
@@ -12,8 +12,9 @@
 # check is older than MPKG_UPDATE_INTERVAL minutes (default a day). --auto is
 # silent, and does nothing when a check is recent or one is already running.
 #
-# Packages run by their own installers (rustup, nvm, uv, ...) and config and
-# meta packages have no upstream version mpkg can compare, and are skipped.
+# Packages run by their own installers (rustup, nvm, uv, ...), meta packages
+# and unversioned ones have no version mpkg can compare, and are skipped.
+# Configuration packages are checked against the checkout (configcommon).
 
 MPKG_UPDATE_JOBS=8
 
@@ -92,7 +93,7 @@ mpkg::update_check() {
         mpkg::db_installed "${p}" || { mpkg::warn "${p} is not installed"; continue; }
         k="$(mpkg::db_get "${p}" kind)"
         case "${k}" in
-            meta|config) ;;
+            meta)        ;;
             script)      own+=("${p}") ;;
             *)           check+=("${p}") ;;
         esac

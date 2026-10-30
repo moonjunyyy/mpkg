@@ -184,6 +184,27 @@ mpkg::doc_examples() {
     (( $# > 5 )) && mpkg::say "      ... and $(( $# - 5 )) more"
 }
 
+# Every installed package's shell fragments, as its declarations would write
+# them now: a package installed before it declared any, or whose declaration
+# changed since, is out of step until they are rewritten.
+mpkg::doc_shell() {
+    mpkg::head "shell environment"
+    local tmp n line
+    local -a diff=()
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/mpkg-shell.XXXXXX")" || return 0
+    mpkg::shell_render_all "${tmp}"
+    n="$(ls "${tmp}/env.d" "${tmp}/rc.d" 2>/dev/null | grep -c '\.sh$')"
+    mapfile -t diff < <(mpkg::shell_diff "${tmp}")
+    rm -rf "${tmp}"
+    if (( ${#diff[@]} == 0 )); then
+        mpkg::ok "${n} fragment(s), as the installed packages declare them"
+        return 0
+    fi
+    mpkg::doc_problem "${#diff[@]} shell fragment(s) out of step with their packages:"
+    for line in "${diff[@]}"; do mpkg::say "      ${line}"; done
+    MPKG_DOC_SHELL=1
+}
+
 mpkg::doc_trust() {
     mpkg::head "trust store"
     if [[ -n "${MPKG_CA_BUNDLE}" ]]; then
@@ -239,13 +260,13 @@ mpkg::doc_git() {
 mpkg::doc_repair() {
     local p e dest
     (( ${#MPKG_DOC_RELINK[@]} + ${#MPKG_DOC_FORCE_RELINK[@]} + ${#MPKG_DOC_REINSTALL[@]} \
-       + ${#MPKG_DOC_ENV_RELINK[@]} + ${MPKG_DOC_PRUNE:-0} )) || return 0
+       + ${#MPKG_DOC_ENV_RELINK[@]} + ${MPKG_DOC_PRUNE:-0} + ${MPKG_DOC_SHELL:-0} )) || return 0
 
     if (( ! MPKG_FIX )); then
         mpkg::say ""
         mpkg::say "To repair:"
-        (( ${#MPKG_DOC_RELINK[@]} + ${#MPKG_DOC_ENV_RELINK[@]} + ${MPKG_DOC_PRUNE:-0} )) \
-            && mpkg::say "  mpkg doctor --fix                  relinks and prunes what it can"
+        (( ${#MPKG_DOC_RELINK[@]} + ${#MPKG_DOC_ENV_RELINK[@]} + ${MPKG_DOC_PRUNE:-0} + ${MPKG_DOC_SHELL:-0} )) \
+            && mpkg::say "  mpkg doctor --fix                  relinks, prunes and rewrites shell fragments"
         (( ${#MPKG_DOC_FORCE_RELINK[@]} )) \
             && mpkg::say "  mpkg link --force ${MPKG_DOC_FORCE_RELINK[*]}   moves the files in the way to *.mpkg-orig"
         (( ${#MPKG_DOC_REINSTALL[@]} )) \
@@ -269,6 +290,7 @@ mpkg::doc_repair() {
             && mpkg::ok "relinked ${p} in ${e}" || mpkg::err "${p} in ${e}: relink incomplete"
     done
     (( ${MPKG_DOC_PRUNE:-0} )) && mpkg::prune_links
+    (( ${MPKG_DOC_SHELL:-0} )) && mpkg::shell_sync
     for p in "${MPKG_DOC_FORCE_RELINK[@]}"; do
         mpkg::warn "${p}: files are in the way of its links; not moving them without: mpkg link --force ${p}"
     done
@@ -282,13 +304,14 @@ mpkg::doc_repair() {
 }
 
 mpkg::doc_run() {
-    MPKG_DOC_PROBLEMS=0 MPKG_DOC_WARNINGS=0 MPKG_DOC_PRUNE=0
+    MPKG_DOC_PROBLEMS=0 MPKG_DOC_WARNINGS=0 MPKG_DOC_PRUNE=0 MPKG_DOC_SHELL=0
     MPKG_DOC_RELINK=() MPKG_DOC_FORCE_RELINK=() MPKG_DOC_REINSTALL=() MPKG_DOC_ENV_RELINK=()
     mpkg::head "prefix"
     mpkg::say "  ${MPKG_PREFIX}   (os=${_OS} arch=${_ARCH} jobs=${_NPROCESSORS})"
     mpkg::doc_tools
     mpkg::doc_database
     mpkg::doc_links
+    mpkg::doc_shell
     mpkg::doc_trust
     mpkg::doc_libs
     mpkg::doc_git

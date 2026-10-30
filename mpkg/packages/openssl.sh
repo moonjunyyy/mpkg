@@ -41,6 +41,12 @@ mpkg_post_install() {
     fi
 }
 
+# Programs that do not use this OpenSSL's default CAfile find the same trust
+# store through SSL_CERT_FILE.
+mpkg_shell_env() {
+    printf '%s\n' '[ -r "${MPKG_PREFIX}/ssl/cert.pem" ] && export SSL_CERT_FILE="${MPKG_PREFIX}/ssl/cert.pem"'
+}
+
 mpkg_verify() {
     mpkg::have_shared_lib ssl && mpkg::have_shared_lib crypto && return 0
     mpkg::err "libssl.so / libcrypto.so are not linkable from ${MPKG_PREFIX}/lib"

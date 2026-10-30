@@ -139,8 +139,23 @@ render() { mpkg::render "$@"; }
 # Is <name> linkable as a shared library from the prefix? (-l<name> resolves)
 mpkg::have_shared_lib() {
     local name="$1" d
-    for d in "${MPKG_PREFIX}/lib" "${MPKG_PREFIX}/lib64"; do
+    for d in ${MPKG_LIBDIRS:-lib lib64}; do
+        d="${MPKG_PREFIX}/${d}"
         [[ -e "${d}/lib${name}.so" || -e "${d}/lib${name}.dylib" ]] && return 0
+    done
+    return 1
+}
+
+# Does the compiler find <header> without help, i.e. does the system have the
+# library's development files? (MPKG_SYSINC, from core_init.) A package depends
+# on a library only where it is missing:
+#   mpkg::have_header zlib.h || MPKG_DEPENDS+=(zlib)
+mpkg::have_header() {
+    local d
+    local -a dirs
+    IFS=':' read -r -a dirs <<< "${MPKG_SYSINC:-/usr/include}"
+    for d in "${dirs[@]}"; do
+        [[ -n "${d}" && -e "${d}/$1" ]] && return 0
     done
     return 1
 }
@@ -172,25 +187,52 @@ mpkg::copy_clean() {
     fi
 }
 
-# tree_digest <dir> — a short content hash of the regular files under <dir>,
-# names included, so it changes whenever a file is added, removed, renamed or
-# edited; junk (mpkg::is_junk) does not count. MPKG_DIGEST_SKIP lists paths,
-# relative to <dir>, to leave out.
-mpkg::tree_digest() {
-    local dir="$1"
-    local sum=(cksum)
-    if command -v sha256sum >/dev/null 2>&1; then sum=(sha256sum)
-    elif command -v shasum >/dev/null 2>&1; then sum=(shasum -a 256)
+# sha256 — the hex SHA-256 of stdin. Status 1, with stdin left unread, when
+# the machine has neither sha256sum (GNU) nor shasum (macOS, BSD perl).
+mpkg::sha256() {
+    local out
+    if command -v sha256sum >/dev/null 2>&1; then out="$(sha256sum)"
+    elif command -v shasum >/dev/null 2>&1; then out="$(shasum -a 256)"
+    else return 1
     fi
-    (
-        cd "${dir}" || exit 1
-        find . -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
-            f="${f#./}"
-            [[ " ${MPKG_DIGEST_SKIP:-} " == *" ${f} "* ]] && continue
-            mpkg::is_junk "${f}" && continue
-            printf '%s\n' "${f}"; cat "${f}"
-        done
-    ) | "${sum[@]}" | cut -c1-10
+    printf '%s\n' "${out%% *}"
+}
+
+# path_digest <file-or-dir> — a short content hash, names included, so it
+# changes whenever a file is added, removed, renamed or edited; junk
+# (mpkg::is_junk) does not count. MPKG_DIGEST_SKIP lists paths, relative to a
+# directory, to leave out. Without a SHA-256 tool, cksum still tells versions
+# apart.
+mpkg::path_digest() {
+    local path="$1"
+    {
+        if [[ -d "${path}" ]]; then
+            (
+                cd "${path}" || exit 1
+                find . -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do
+                    f="${f#./}"
+                    [[ " ${MPKG_DIGEST_SKIP:-} " == *" ${f} "* ]] && continue
+                    mpkg::is_junk "${f}" && continue
+                    printf '%s\n' "${f}"; cat "${f}"
+                done
+            )
+        elif [[ -f "${path}" ]]; then
+            printf '%s\n' "${path##*/}"; cat "${path}"
+        fi
+    } | { mpkg::sha256 || cksum; } | cut -c1-10
+}
+
+# The checkout mpkg's own files come from: this one, unless this is an
+# installed copy whose checkout is still around (it records it in .source).
+# Configuration packages install from here too, so an edit in the checkout is
+# picked up without reinstalling mpkg first.
+mpkg::source_root() {
+    local src="${MPKG_ROOT}" origin
+    if [[ -r "${MPKG_ROOT}/.source" ]]; then
+        origin="$(cat "${MPKG_ROOT}/.source")"
+        [[ -x "${origin}/mpkg/mpkg" ]] && src="${origin}"
+    fi
+    printf '%s\n' "${src}"
 }
 
 mpkg::confirm() {

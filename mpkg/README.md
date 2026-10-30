@@ -14,7 +14,7 @@ mpkg doctor --fix               # check the prefix, repair what is repairable
 ```
 
 mpkg installs itself like any other executable: the `mpkg` package copies
-`mpkg/` and `nvim/` into `$MPKG_PREFIX/soft/mpkg-<version>/libexec/mpkg` and
+`mpkg/` and `config/` into `$MPKG_PREFIX/soft/mpkg-<version>/libexec/mpkg` and
 links a `bin/mpkg` wrapper into `$MPKG_PREFIX/bin`. The version is
 `MPKG_VERSION_STR` plus a hash of the copied files, so installing again after
 the checkout changed replaces the tree. The installed copy remembers its
@@ -23,8 +23,14 @@ checkout; after a `git pull` there, `mpkg upgrade mpkg` picks up the changes.
 ## Layout
 
 ```
+config/               configuration, as data, that the *-config packages install
+  nvim/               ~/.config/nvim
+  vim/vimrc           ~/.vimrc
 mpkg/
   mpkg                CLI entry point
+  shell/
+    env.sh            what every shell, and every build, loads (POSIX sh)
+    interactive.sh    what interactive bash/zsh load after it
   lib/
     core.sh           platform detection, prefix layout, logging, build flags
     util.sh           downloads, release discovery, version compare, templates
@@ -37,6 +43,7 @@ mpkg/
     venv.sh           environments: extra symlink views of the store
     doctor.sh         checking the prefix and its links, and repairing them
     update.sh         checking upstream for newer releases
+    shell.sh          the environment packages declare, as shell fragments
   packages/
     *common.sh        base classes
     <name>.sh         one file per package
@@ -62,7 +69,7 @@ a package is exact: the link manifest says which paths it owns.
 | `doctor [--fix]` | check the prefix and every link in it (see below) |
 | `venv <sub> ...` | environments: create, add, rm, update, list, delete, activate, run |
 | `gc` | delete store trees that nothing uses |
-| `env` | the shell snippet this prefix needs |
+| `env [pkg]...` | the lines a startup file needs; with names, what those packages add to the shell |
 | `log <pkg>` | the last build log |
 
 Useful flags: `--prefix DIR`, `-j N`, `-n/--dry-run`, `-f/--force`, `--fix`, `--auto`,
@@ -206,16 +213,60 @@ above an extension rather than a replacement, at any inheritance depth.
 | `pwmtcommon` | pwmt.org projects, URLs derived from the name (girara, zathura) | as `mesoncommon` |
 | `cmakecommon` | source tarball built with CMake (poppler) | as `srccommon` |
 | `scriptcommon` | upstream installer scripts (rustup, nvm, uv) | guard, fetch, install |
+| `configcommon` | configuration from `config/`, installed into the home directory | discover, install |
 | `metacommon` | dependencies only (`workspace`, `toolchain`) | — |
+
+### Dependencies the system may already satisfy
+
+`MPKG_REQUIRES_CMD` names tools that must be on `PATH`. A package that puts
+one there says so in `MPKG_PROVIDES_CMD` (pkgconf: `pkg-config`; perl, m4,
+bison, texinfo, autoconf), and the resolver turns a required command this
+machine lacks into a dependency on its provider; where the system has it,
+nothing is built. Libraries go by their headers:
+`mpkg::have_header zlib.h || MPKG_DEPENDS+=(zlib)` depends on zlib only where
+the compiler would not find `zlib.h` by itself (the SDK on macOS,
+`/usr/include` elsewhere). Libraries built for that reason are static and
+position-independent (zlib, libyaml, ncurses), so they never shadow the
+system's copies on `LD_LIBRARY_PATH`.
 
 ### Hooks
 
 `mpkg_describe` runs after the package body, for defaults that need
-`MPKG_NAME`. `mpkg_env` runs on *every* invocation, installed or not, and is
-where a package extends `CPATH` / `PATH` for the packages built after it.
-`mpkg_post_install` runs only after an actual install. `mpkg_verify` runs last
-and can fail the install — `git` uses it to refuse a build with no https
-support.
+`MPKG_NAME`. `mpkg_post_install` runs only after an actual install.
+`mpkg_verify` runs last and can fail the install — `git` uses it to refuse a
+build with no https support.
+
+### The environment a package needs
+
+A package that needs something in the environment declares it; nothing else
+in mpkg names it. `MPKG_ENV` holds directives whose values are expanded when
+the shell starts:
+
+```bash
+# packages/go.sh
+MPKG_ENV=(
+    'default GOPATH ${HOME}/go'                # export, unless already set
+    'path PATH ${GOBIN:-${GOPATH%%:*}/bin}'    # to the front, if the directory exists
+)
+# packages/jdk.sh
+MPKG_ENV=('set JAVA_HOME ${MPKG_PREFIX}/libexec/jdk')
+```
+
+What a directive cannot say, `mpkg_shell_env` prints as POSIX sh (nodejs puts
+the newest node on `PATH`), and `mpkg_shell_rc` prints what only interactive
+bash/zsh should run (starship's init, Oh My Zsh, `nvm.sh`).
+`MPKG_SHELL_ORDER` (default 50) orders the fragments: Oh My Zsh is 10,
+starship 80 so its prompt wins, RVM 90 because it wants its `PATH` first.
+
+After every install mpkg writes these out as
+`var/mpkg/shell/env.d/NN-<pkg>.sh` and `rc.d/NN-<pkg>.sh`, and removes them
+with the package. `mpkg/shell/env.sh` loads every `env.d` fragment and
+`interactive.sh` every `rc.d` one. mpkg sources the same `env.sh` before it
+builds, and again after each package, so what a shell sees and what the next
+build sees are the same thing: once `go` is installed, a later package that
+runs `go install` finds its result on `PATH`. `mpkg env go` shows a package's
+fragments; `mpkg doctor` reports fragments out of step with their packages,
+and `--fix` rewrites them.
 
 Templates in `MPKG_TARBALL_URL`, `MPKG_ASSET`, `MPKG_MAKE_VARS` and friends are
 single-quoted and expanded once the version is known. Available placeholders:
@@ -262,35 +313,63 @@ every certificate. `openssl`'s `mpkg_post_install` points `$PREFIX/ssl/cert.pem`
 at the system CA bundle, and `curl` is configured with an explicit
 `--with-ca-bundle` instead of relying on configure's probe.
 
-## Editor and PDF viewer packages
+## Configuration packages
 
-- `nvim-config` copies the repository's `nvim/` (a Lua configuration:
-  lazy.nvim, the built-in LSP client, nvim-treesitter's main branch) to
-  `~/.config/nvim`, then installs the plugins at the commits in
-  `lazy-lock.json` and the tree-sitter parsers, so the first start downloads
-  nothing. Its version is a hash of `nvim/`; a configuration mpkg did not
-  write, or one edited in place, is moved to `~/.config/nvim.mpkg-backup.<time>`
-  first. It pulls in `tree-sitter` (the CLI nvim-treesitter builds parsers
-  with) and `jdk` (Eclipse Temurin LTS: `java`, `javac`; the tree lives in
-  `libexec/jdk`, which is `JAVA_HOME`).
-- `mason` installs the servers listed in `nvim/lua/config/languages.lua`
-  (the same list the configuration gives mason-lspconfig), headless and
-  synchronously, after the runtimes Mason's installers need (nodejs, uv, rust,
-  jdk). Names with no Mason package are skipped with a warning.
-- `zathura-pdf-poppler` pulls in `zathura`, `girara`, `gtk` (GTK 4) and
-  `poppler`. The libraries below GTK (glib, cairo, pango, ...) come from the
-  system when pkg-config finds them, otherwise from GTK's Meson wraps. zathura
-  is built to look for plugins in `$MPKG_PREFIX/lib/zathura`, where each
-  plugin's links land. GTK's GSettings schemas are compiled in
-  `$MPKG_PREFIX/share/glib-2.0/schemas`, found through `XDG_DATA_DIRS`.
+Configuration is data in the repository: `config/<name>/` (a directory or a
+single file) is what the `<name>-config` package installs, by default as
+`~/.config/<name>`. They share one base class, `configcommon`; a new one is a
+directory under `config/` plus a package of a few lines:
+
+```bash
+# packages/vim-config.sh
+mpkg_inherit configcommon
+MPKG_TITLE="Vim configuration"
+MPKG_CONFIG_SRC='config/vim/vimrc'     # default: config/${name%-config}
+MPKG_CONFIG_DEST='${HOME}/.vimrc'      # default: ~/.config/${name%-config}
+```
+
+- **Ownership.** mpkg records a digest of the copy it installed
+  (`var/mpkg/config/<pkg>`). A target that does not match -- written by hand,
+  edited in place, or older than mpkg -- is moved to
+  `<target>.mpkg-backup.<time>` before the new copy goes in, and `mpkg remove`
+  leaves it where it is; an unchanged one it deletes. `MPKG_CONFIG_KEEP`
+  lists files the program rewrites itself (nvim's `lazy-lock.json`), which do
+  not count as edits.
+- **Versions.** The version is a digest of the source, read from the checkout
+  even by an installed mpkg, so `mpkg update` reports a configuration that
+  changed there and `mpkg upgrade` installs it.
+
+The packages:
+
+- `nvim-config` installs `config/nvim` (lazy.nvim, the built-in LSP client,
+  nvim-treesitter's main branch), then the plugins at the commits in
+  `lazy-lock.json`, the tree-sitter parsers and the Python/Ruby providers, so
+  the first start downloads nothing. It pulls in `tree-sitter` and `jdk`
+  (Eclipse Temurin LTS in `libexec/jdk`, which is `JAVA_HOME`).
+- `vim-config` installs `config/vim/vimrc` as `~/.vimrc` for plain vim.
+- `mason` installs the servers listed in `lua/config/languages.lua` of the
+  configuration nvim runs (the same list it gives mason-lspconfig), headless
+  and synchronously, after the runtimes Mason's installers need (nodejs, uv,
+  rust, jdk). Names with no Mason package are skipped with a warning.
+
+## PDF viewer
+
+`zathura-pdf-poppler` pulls in `zathura`, `girara`, `gtk` (GTK 4) and
+`poppler`. The libraries below GTK (glib, cairo, pango, ...) come from the
+system when pkg-config finds them, otherwise from GTK's Meson wraps. zathura
+is built to look for plugins in `$MPKG_PREFIX/lib/zathura`, where each
+plugin's links land. GTK's GSettings schemas are compiled in
+`$MPKG_PREFIX/share/glib-2.0/schemas`, found through `XDG_DATA_DIRS`.
 
 ## Go
 
 `mpkg install go` installs the newest stable Go from go.dev, after checking
 the archive against the SHA-256 go.dev publishes. The go command finds its
-GOROOT from its own location, so nothing has to set GOROOT; `env.sh` puts
-`$GOBIN`, or else `$GOPATH/bin` (`~/go/bin` by default), on `PATH`, so what
-`go install` builds is found. `go` is part of `workspace`.
+GOROOT from its own location, so nothing has to set GOROOT. Its `MPKG_ENV`
+sets `GOPATH` (`~/go`) unless it is set, and puts `$GOBIN`, or else
+`$GOPATH/bin`, on `PATH`; that directory is created at install, so what
+`go install` builds is found by every new shell, and by mpkg's later builds.
+`go` is part of `workspace`.
 
 ## Environment
 
@@ -299,7 +378,9 @@ GOROOT from its own location, so nothing has to set GOROOT; `env.sh` puts
 (GNU make; `gmake` is picked up on the BSDs), `MPKG_GIT_RUST` (`yes`/`no`;
 by default git's Rust parts are built only when a working `cargo` exists,
 otherwise git is built with `NO_RUST`), `MPKG_UPDATE_INTERVAL` and
-`MPKG_NO_UPDATE_CHECK` (see "Updates and upgrade notices").
+`MPKG_NO_UPDATE_CHECK` (see "Updates and upgrade notices"), `MPKG_SYSINC`
+(the system header directories `mpkg::have_header` searches; default the SDK
+on macOS, `/usr/local/include:/usr/include` elsewhere).
 
 Commands that change the prefix take a lock, `$MPKG_PREFIX/var/mpkg/lock`, so
 two mpkg runs cannot interleave. A lock left by a crashed run on the same host
@@ -309,20 +390,32 @@ tree removed from `soft/` (kept with `--keep-work`).
 
 ## Shell setup
 
-`mpkg install shell-config` writes two files and sources them from each
-shell's startup files through a `# >>> mpkg >>>` block; nothing else in those
-files is touched, and `mpkg remove shell-config` takes the blocks out again.
+`mpkg install shell-config` adds a `# >>> mpkg >>>` block to each startup file
+of the shells on the machine; nothing else in those files is touched, and
+`mpkg remove shell-config` takes the blocks out again. The block only sets the
+prefix and sources mpkg's two shell files, which the `mpkg` package links into
+`share/mpkg/`:
+
+```sh
+# >>> mpkg >>>
+export MPKG_PREFIX="/home/me/.local"
+[ -f "${MPKG_PREFIX}/share/mpkg/env.sh" ] && . "${MPKG_PREFIX}/share/mpkg/env.sh"
+[ -f "${MPKG_PREFIX}/share/mpkg/interactive.sh" ] && . "${MPKG_PREFIX}/share/mpkg/interactive.sh"
+# <<< mpkg <<<
+```
 
 | file | contents | sourced from |
 | --- | --- | --- |
-| `share/mpkg/env.sh` | environment variables only (POSIX sh, re-sourcing is harmless) | `~/.profile`, `~/.bash_profile` (only if it exists), `~/.bashrc`, `~/.zprofile`, `~/.zshrc` |
-| `share/mpkg/interactive.sh` | `mpkg_activate`, Oh My Zsh, starship, nvm, RVM, the upgrade notice | `~/.bashrc`, `~/.zshrc` |
+| `share/mpkg/env.sh` | the prefix's directories and every package's `env.d` fragment (POSIX sh, re-sourcing is harmless) | `~/.profile`, `~/.bash_profile` (only if it exists), `~/.bashrc`, `~/.zprofile`, `~/.zshrc` |
+| `share/mpkg/interactive.sh` | `mpkg_activate`, every package's `rc.d` fragment, the upgrade notice | `~/.bashrc`, `~/.zshrc` |
 
-bash and zsh files are only written when that shell is installed, and Oh My
-Zsh is only a dependency where zsh exists. `env.sh` moves the prefix to the
-front of `PATH` rather than only adding it, so macOS's `path_helper` cannot
-push it behind `/usr/bin`. `mpkg env` prints `env.sh`.
+Neither file names a package, and neither is generated: installing or
+removing a package changes the next shell without touching them. bash and zsh
+files are only written when that shell is installed, and Oh My Zsh is only
+part of `workspace` where zsh exists. `env.sh` moves the prefix to the front
+of `PATH` rather than only adding it, so macOS's `path_helper` cannot push it
+behind `/usr/bin`. `mpkg env` prints the block.
 
 mpkg needs bash 4 or newer. On macOS, where `/bin/bash` is 3.2, it re-runs
 itself under Homebrew's or MacPorts' bash when one is installed. State lives in
-`$MPKG_PREFIX/var/mpkg/{db,log,work}`.
+`$MPKG_PREFIX/var/mpkg/{db,log,work,shell,config}`.

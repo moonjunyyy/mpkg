@@ -18,8 +18,15 @@ MPKG_DEPENDS=(
     uv
     neovim
     nvim-config
+    vim-config
     mason
     zathura-pdf-poppler
     starship
-    shell-config            # pulls in oh-my-zsh where zsh exists
+    shell-config
 )
+
+# Oh My Zsh only where there is a zsh to run it.
+mpkg_describe() {
+    command -v zsh >/dev/null 2>&1 && MPKG_DEPENDS+=(oh-my-zsh)
+    return 0
+}

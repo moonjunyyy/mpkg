@@ -28,7 +28,7 @@ MPKG_CONFIGURE_FLAGS=(
 
 # GTK reads its settings through GSettings, and GLib only finds schemas that
 # are compiled into ${datadir}/glib-2.0/schemas/gschemas.compiled on
-# XDG_DATA_DIRS (shell-config adds ${MPKG_PREFIX}/share). A GTK program without
+# XDG_DATA_DIRS (MPKG_ENV below adds ${MPKG_PREFIX}/share). A GTK program without
 # them aborts the first time it opens a file chooser.
 #
 # That file is compiled from every schema in the prefix, so it belongs to the
@@ -59,12 +59,12 @@ mpkg_post_install() {
     return 0
 }
 
-mpkg_env() {
-    # An unset XDG_DATA_DIRS means the spec's default, which must survive.
-    [[ -n "${XDG_DATA_DIRS:-}" ]] || export XDG_DATA_DIRS="/usr/local/share:/usr/share"
-    environment_prepend "XDG_DATA_DIRS" "${MPKG_PREFIX}/share"
-    return 0
-}
+# GSettings finds the compiled schemas through XDG_DATA_DIRS. Unset means the
+# spec's default, which has to survive ours being added.
+MPKG_ENV=(
+    'default XDG_DATA_DIRS /usr/local/share:/usr/share'
+    'path XDG_DATA_DIRS ${MPKG_PREFIX}/share'
+)
 
 mpkg_verify() {
     local pc="${MPKG_SOFT}/${MPKG_DEST_NAME}/lib/pkgconfig"

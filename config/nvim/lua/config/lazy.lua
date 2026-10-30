@@ -1,4 +1,6 @@
--- lazy.nvim bootstrap: clone it on first start, then load lua/plugins/*.lua.
+-- lazy.nvim bootstrap: clone it on first start, then load the core plugins
+-- (lua/plugins/*.lua) and the feature modules that are not dropped
+-- (lua/modules/*.lua, see config/loader.lua).
 local lazypath = vim.fn.stdpath('data') .. '/lazy/lazy.nvim'
 if not vim.uv.fs_stat(lazypath) then
     local out = vim.fn.system({
@@ -12,8 +14,10 @@ if not vim.uv.fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
+local modules = require('config.loader')
+
 require('lazy').setup({
-    spec = { { import = 'plugins' } },
+    spec = vim.list_extend({ { import = 'plugins' } }, modules.spec()),
     install = { colorscheme = { 'catppuccin-mocha', 'habamax' } },
     checker = { enabled = false },
     change_detection = { notify = false },
@@ -24,3 +28,5 @@ require('lazy').setup({
         },
     },
 })
+
+modules.command()

@@ -1,112 +1,23 @@
-# Installs the editor configuration that ships with this repository (nvim/) into
-# ~/.config/nvim. It is a package like any other so the solver pulls in the
-# runtimes the plugins need (git for lazy.nvim, the tree-sitter CLI and a C
-# compiler for nvim-treesitter's parsers, a Python for pynvim, a Ruby for the
+# The Neovim configuration in config/nvim/ (lazy.nvim, the built-in LSP
+# client, nvim-treesitter), installed as ~/.config/nvim by configcommon. After
+# installing it, the plugins are installed at the commits in lazy-lock.json
+# and the tree-sitter parsers built, so the first start downloads nothing;
+# the dependencies are what that needs (git for lazy.nvim, the tree-sitter CLI
+# and a C compiler for the parsers, uv for the Python provider, ruby for the
 # neovim gem, a JDK for the Java tooling).
-#
-# The version is a hash of nvim/, so re-running the install after the
-# configuration changed in the repository replaces the installed copy. A copy
-# that was edited in place, or a configuration mpkg did not write (such as the
-# old init.vim), is moved aside to ~/.config/nvim.mpkg-backup.<time> first.
 
-mpkg_inherit pkgcommon
+mpkg_inherit configcommon
 
 MPKG_TITLE="Neovim configuration"
 MPKG_DESC="init.lua and lua/ (lazy.nvim, LSP, tree-sitter), plugins, parsers and providers"
-MPKG_KIND="config"
-MPKG_UNVERSIONED=1
-MPKG_PROBE_CMD=""
 MPKG_DEPENDS=(neovim git uv ruby tree-sitter jdk)
+# lazy.nvim rewrites its lockfile on every plugin update; that is not an edit.
+MPKG_CONFIG_KEEP=(lazy-lock.json)
 
-MPKG_NVIM_SRC="${MPKG_ROOT}/nvim"
-MPKG_NVIM_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/nvim"
-MPKG_NVIM_STAMP=".mpkg-stamp"
-# What the stamp does not cover: itself, and the lockfile, which lazy.nvim
-# rewrites on every plugin update -- that is not an edit.
-MPKG_NVIM_SKIP="${MPKG_NVIM_STAMP} lazy-lock.json"
-
-mpkg_run() {
-    [[ -r "${MPKG_NVIM_SRC}/init.lua" ]] || { mpkg::err "missing ${MPKG_NVIM_SRC}/init.lua"; return 1; }
-    command -v nvim >/dev/null 2>&1 || { mpkg::err "nvim is not on PATH"; return 1; }
-
-    MPKG_VERSION="$(mpkg::tree_digest "${MPKG_NVIM_SRC}")"
-    mpkg::report_versions
-    if [[ ${MPKG_FORCE:-0} -eq 0 && "${MPKG_VERSION}" == "${MPKG_INSTALLED_VERSION}" ]] \
-       && mpkg::nvim_is_ours; then
-        MPKG_STATUS="current"
-        return 0
-    fi
-
-    mpkg::nvim_write_config || return 1
-    mpkg::nvim_vimrc
+mpkg_post_install() {
+    command -v nvim >/dev/null 2>&1 || { mpkg::warn "nvim is not on PATH; plugins not installed"; return 0; }
     mpkg::nvim_providers
     mpkg::nvim_plugins
-
-    MPKG_DEST_NAME=""
-    MPKG_STATUS="installed"
-}
-
-# The installed directory is exactly what mpkg wrote there last time.
-mpkg::nvim_is_ours() {
-    local stamp="${MPKG_NVIM_DIR}/${MPKG_NVIM_STAMP}"
-    [[ -f "${stamp}" ]] || return 1
-    [[ "$(MPKG_DIGEST_SKIP="${MPKG_NVIM_SKIP}" mpkg::tree_digest "${MPKG_NVIM_DIR}")" \
-       == "$(cat "${stamp}")" ]]
-}
-
-mpkg::nvim_write_config() {
-    local backup
-    if [[ -e "${MPKG_NVIM_DIR}" || -L "${MPKG_NVIM_DIR}" ]]; then
-        if mpkg::nvim_is_ours; then
-            rm -rf "${MPKG_NVIM_DIR:?}"
-        else
-            backup="${MPKG_NVIM_DIR}.mpkg-backup.$(date +%Y%m%d-%H%M%S)"
-            mv "${MPKG_NVIM_DIR}" "${backup}" || return 1
-            mpkg::warn "moved the existing configuration to ${backup}"
-        fi
-    fi
-
-    mpkg::step "installing ${MPKG_NVIM_DIR} from the repository"
-    mkdir -p "$(dirname "${MPKG_NVIM_DIR}")" || return 1
-    mpkg::copy_clean "${MPKG_NVIM_SRC}" "${MPKG_NVIM_DIR}" || return 1
-    MPKG_DIGEST_SKIP="${MPKG_NVIM_SKIP}" mpkg::tree_digest "${MPKG_NVIM_DIR}" \
-        > "${MPKG_NVIM_DIR}/${MPKG_NVIM_STAMP}"
-
-    local plugged="${XDG_DATA_HOME:-${HOME}/.local/share}/nvim/plugged"
-    [[ -d "${plugged}" ]] && mpkg::step "the old vim-plug plugins in ${plugged} are unused now and can be deleted"
-    return 0
-}
-
-# ~/.vimrc is for plain vim; the Neovim configuration no longer reads it.
-mpkg::nvim_vimrc() {
-    if [[ -f "${HOME}/.vimrc" && ${MPKG_FORCE:-0} -eq 0 ]]; then
-        return 0
-    fi
-    mpkg::step "writing ~/.vimrc"
-    cat > "${HOME}/.vimrc" <<'VIMRC'
-set nocompatible
-set hlsearch
-set encoding=utf8
-set fileencodings=utf-8,euc-kr,cp949
-set bs=indent,eol,start
-set history=1000
-set ruler
-set nobackup
-set title
-set showmatch
-set nowrap
-set wildmenu
-set wildmode=longest:full,full
-set cursorline
-set tabstop=4
-set shiftwidth=4
-set softtabstop=4
-set expandtab
-set clipboard+=unnamedplus
-set number
-syntax on
-filetype plugin indent on
-VIMRC
 }
 
 # Language providers. None of them is fatal. The Python venv lives in nvim's
@@ -150,10 +61,4 @@ LUA
     local missing; missing="$(sed -n 's/.*mpkg-parsers-missing //p' "${MPKG_LOG}")"
     [[ -n "${missing}" ]] && mpkg::warn "parsers not installed: ${missing}"
     return 0
-}
-
-mpkg_link() { return 0; }
-
-mpkg_remove() {
-    mpkg::warn "leaving ${MPKG_NVIM_DIR} in place; delete it by hand if it should go"
 }

@@ -27,7 +27,7 @@ fi
 
 # Follow symlinks to the real script: mpkg may be run through a link on PATH.
 # MPKG_ROOT is the directory holding mpkg/ and the configuration it installs
-# (nvim/): the repository checkout, or libexec/mpkg of an installed copy.
+# (config/): the repository checkout, or libexec/mpkg of an installed copy.
 _self="${BASH_SOURCE[0]}"
 while [[ -L "${_self}" ]]; do
     _link="$(readlink -- "${_self}")"
@@ -43,7 +43,7 @@ export MPKG_ROOT MPKG_HOME MPKG_PACKAGES
 
 MPKG_VERSION_STR="0.2.0"
 
-for _m in core util class db link registry depsolve engine venv doctor update; do
+for _m in core util class db link registry depsolve engine venv shell doctor update; do
     # shellcheck source=/dev/null
     . "${MPKG_LIB}/${_m}.sh" || { echo "mpkg: cannot load lib/${_m}.sh" >&2; exit 1; }
 done
@@ -75,7 +75,7 @@ commands:
   prune                delete links pointing at packages that are gone
   adopt                register package trees already in soft/ into the database
   doctor [--fix]       check the prefix for known breakages, optionally repair
-  env                  print the shell snippet for this prefix
+  env [pkg]...         the lines a startup file needs; or what packages add to the shell
   log <pkg>            show the last build log
   clean                empty the work directory
   gc                   delete store trees nothing uses (asks first; -n to list)
@@ -218,6 +218,8 @@ cmd_info() {
     printf '%-12s %s\n' "depends:" "$(mpkg::meta "${p}" deps)"
     [[ -n "$(mpkg::meta "${p}" optdeps)" ]] && printf '%-12s %s\n' "optional:" "$(mpkg::meta "${p}" optdeps)"
     [[ -n "$(mpkg::meta "${p}" reqs)"    ]] && printf '%-12s %s\n' "needs:"    "$(mpkg::meta "${p}" reqs)"
+    local sh; sh="$( mpkg::class_load "${p}" >/dev/null 2>&1 && { mpkg::shell_directives; mpkg::optional shell_env; } )"
+    [[ -n "${sh}" ]] && printf '%-12s %s\n' "shell:" "${sh//$'\n'/$'\n'             }"
     if mpkg::db_installed "${p}"; then
         local dest files
         dest="$(mpkg::db_dest "${p}")"
@@ -393,16 +395,25 @@ cmd_log() {
     cat "${f}"
 }
 
+# The lines a startup file needs (shell-config writes them for you); with
+# package names, what each of those adds to the environment.
 cmd_env() {
-    local f="${MPKG_PREFIX}/share/mpkg/env.sh"
-    if [[ -f "${f}" ]]; then
-        cat "${f}"
-    else
-        mpkg::warn "no env file yet — run 'mpkg install shell-config'"
-        printf 'export PATH="%s/bin:$PATH"\n' "${MPKG_PREFIX}"
-        [[ "${_OS}" == "macos" ]] \
-            || printf 'export LD_LIBRARY_PATH="%s/lib:%s/lib64:$LD_LIBRARY_PATH"\n' "${MPKG_PREFIX}" "${MPKG_PREFIX}"
+    if (( ${#ARGS[@]} == 0 )); then
+        [[ -f "${MPKG_PREFIX}/share/mpkg/env.sh" ]] \
+            || mpkg::warn "${MPKG_PREFIX}/share/mpkg/env.sh is missing; run 'mpkg install mpkg'"
+        mpkg::shell_block all
+        return 0
     fi
+    local p rc=0
+    for p in "${ARGS[@]}"; do
+        mpkg::exists "${p}" || { mpkg::err "no such package: ${p}"; rc=1; continue; }
+        ( mpkg::class_load "${p}" >/dev/null 2>&1 || exit 1
+          printf '# %s: environment\n' "${p}"
+          mpkg::shell_directives; mpkg::optional shell_env
+          printf '# %s: interactive\n' "${p}"
+          mpkg::optional shell_rc ) || rc=1
+    done
+    return "${rc}"
 }
 
 cmd_doctor() { mpkg::doctor; }

@@ -1,0 +1,22 @@
+set nocompatible
+set hlsearch
+set encoding=utf8
+set fileencodings=utf-8,euc-kr,cp949
+set bs=indent,eol,start
+set history=1000
+set ruler
+set nobackup
+set title
+set showmatch
+set nowrap
+set wildmenu
+set wildmode=longest:full,full
+set cursorline
+set tabstop=4
+set shiftwidth=4
+set softtabstop=4
+set expandtab
+set clipboard+=unnamedplus
+set number
+syntax on
+filetype plugin indent on

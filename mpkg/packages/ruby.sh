@@ -6,6 +6,12 @@ MPKG_HOMEPAGE="https://www.ruby-lang.org/"
 MPKG_PROBE_CMD="ruby"
 MPKG_DEPENDS=(openssl curl)
 MPKG_REQUIRES_CMD=(cc make)
+# What Ruby's own extensions link, where the system lacks it: macOS has zlib
+# in its SDK but no libyaml, minimal Linux images often have neither's headers.
+# Without them configure skips psych / zlib with one line in the log, and the
+# first `gem install` fails.
+mpkg::have_header yaml.h || MPKG_DEPENDS+=(libyaml)
+mpkg::have_header zlib.h || MPKG_DEPENDS+=(zlib)
 
 MPKG_LISTING_URL="https://cache.ruby-lang.org/pub/ruby/"
 MPKG_TARBALL_URL='https://cache.ruby-lang.org/pub/ruby/${version%.*}/ruby-${version}.tar.gz'
@@ -42,4 +48,20 @@ mpkg_discover() {
     done
     mpkg::err "could not determine the newest Ruby release"
     return 1
+}
+
+# An extension whose library was missing is skipped, not an error. psych and
+# zlib are what gem itself needs, openssl what https needs: a Ruby without
+# them is not "installed".
+mpkg_verify() {
+    local ruby="${MPKG_SOFT}/${MPKG_DEST_NAME}/bin/ruby" e
+    local -a missing=()
+    for e in psych zlib openssl; do
+        "${ruby}" -r"${e}" -e 1 >/dev/null 2>&1 || missing+=("${e}")
+    done
+    if (( ${#missing[@]} )); then
+        mpkg::err "ruby was built without: ${missing[*]} (mpkg log ruby)"
+        return 1
+    fi
+    mpkg::step "psych, zlib and openssl load"
 }
