@@ -93,12 +93,26 @@ mpkg::doc_manifest() {
 }
 
 mpkg::doc_tools() {
-    mpkg::head "build tools"
+    mpkg::head "system tools"
     local t
-    for t in cc "${MPKG_MAKE}" tar; do
-        if command -v "${t}" >/dev/null 2>&1; then mpkg::ok "${t}"
-        else mpkg::doc_problem "${t} is missing"; fi
+    # What mpkg does not build: missing ones are problems.
+    for t in cc tar gzip; do
+        if mpkg::have_cmd "${t}"; then mpkg::ok "${t}"
+        else mpkg::doc_problem "${t} is missing: $(mpkg::system_hint "${t}")"; fi
     done
+    if mpkg::have_cmd curl || mpkg::have_cmd wget; then mpkg::ok "downloader ($(command -v curl || command -v wget))"
+    else mpkg::doc_problem "neither curl nor wget: $(mpkg::system_hint curl)"; fi
+    # Only some packages need these.
+    mpkg::have_cmd c++ \
+        || mpkg::doc_warn "c++ is missing (gtk, poppler and the cmake packages need it): $(mpkg::system_hint c++)"
+    # macOS tar reads .tar.xz itself; GNU tar runs xz.
+    [[ "${_OS}" == macos ]] || mpkg::have_cmd xz \
+        || mpkg::doc_warn "xz is missing: .tar.xz sources (gtk, poppler, ffmpeg) cannot be unpacked; $(mpkg::system_hint xz)"
+    mpkg::have_cmd unzip \
+        || mpkg::doc_warn "unzip is missing (ninja, tree-sitter, mason): $(mpkg::system_hint unzip)"
+    # Built where missing.
+    if "${MPKG_MAKE}" --version 2>/dev/null | grep -q 'GNU Make'; then mpkg::ok "GNU make (${MPKG_MAKE})"
+    else mpkg::doc_warn "no GNU make: 'mpkg install make' builds one from cc alone"; fi
 }
 
 mpkg::doc_database() {

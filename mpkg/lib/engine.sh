@@ -91,6 +91,7 @@ mpkg::install() {
     local -a wanted=("$@")
     local p failed=() done_n=0
 
+    mpkg::base_check || return 1
     mpkg::resolve "${wanted[@]}" || return 1
 
     # A dependency that is already recorded is satisfied; an explicitly named
